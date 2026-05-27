@@ -1,3 +1,4 @@
+import { MODE_DEFAULTS } from "../state/hash"
 import { useStore } from "../state/store"
 
 type SliderProps = {
@@ -72,6 +73,51 @@ export function PalettePanel() {
   return (
     <section className="px-4 py-3 border-b border-zinc-800/80 space-y-3">
       <h2 className="text-xs uppercase tracking-wider text-zinc-400">Palette</h2>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-zinc-300">Profile</span>
+        {(["iq", "hsv"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() =>
+              setPalette({ mode: m, hue: MODE_DEFAULTS[m].hue, scale: MODE_DEFAULTS[m].scale })
+            }
+            className={[
+              "appearance-none px-3 py-1.5 rounded-md border transition-colors leading-none",
+              palette.mode === m
+                ? "bg-zinc-700 border-zinc-600 text-zinc-100"
+                : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200",
+            ].join(" ")}
+          >
+            {m === "hsv" ? "HSV" : "IQ"}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={palette.smooth}
+          onChange={(e) => setPalette({ smooth: e.target.checked })}
+          className="sr-only"
+        />
+        <span
+          aria-hidden
+          className={[
+            "relative inline-block w-9 h-5 rounded-full border transition-colors shrink-0",
+            palette.smooth
+              ? "bg-zinc-600 border-zinc-500"
+              : "bg-zinc-800 border-zinc-700",
+          ].join(" ")}
+        >
+          <span
+            className={[
+              "absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-zinc-200 transition-transform",
+              palette.smooth ? "translate-x-4" : "translate-x-0",
+            ].join(" ")}
+          />
+        </span>
+        <span>Smooth coloring</span>
+      </label>
       <Slider
         label="Hue"
         value={palette.hue}

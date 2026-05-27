@@ -2,23 +2,16 @@ import { Check, Copy, RotateCcw } from "lucide-react"
 import { useState } from "react"
 
 import { useStore } from "../state/store"
-import { type PrecisionTier, pickZoom } from "../util/renderMath"
+import { pickZoom } from "../util/renderMath"
 
 function fmt(n: number, digits = 6): string {
   if (!Number.isFinite(n)) return "—"
   return Number(n.toPrecision(digits)).toString()
 }
 
-const PRECISION_LABEL: Record<PrecisionTier, string> = {
-  f32: "FP32",
-  df: "FP64",
-  tf: "FP96",
-}
-
 export function ViewPanel() {
   const viewport = useStore((s) => s.viewport)
   const resetView = useStore((s) => s.resetView)
-  const precisionTier = useStore((s) => s.precisionTier)
   const [copied, setCopied] = useState(false)
 
   const zoomLevel = pickZoom(viewport.span)
@@ -44,12 +37,7 @@ export function ViewPanel() {
         <dt className="text-zinc-500">span</dt>
         <dd className="text-zinc-300 tabular-nums">{fmt(viewport.span, 6)}</dd>
         <dt className="text-zinc-500">zoom</dt>
-        <dd className="text-zinc-300 tabular-nums flex items-center gap-2">
-          <span>{zoomLevel}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 border border-zinc-700/80 text-zinc-400 font-mono tracking-wider">
-            {PRECISION_LABEL[precisionTier]}
-          </span>
-        </dd>
+        <dd className="text-zinc-300 tabular-nums">{zoomLevel}</dd>
       </dl>
       <div className="flex gap-2 mt-3">
         <button

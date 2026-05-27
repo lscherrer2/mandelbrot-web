@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react"
 
 import { GLRenderer } from "../render/glRenderer"
 import { useStore } from "../state/store"
-import { type PrecisionTier, effectiveIterations } from "../util/renderMath"
+import { effectiveIterations } from "../util/renderMath"
 
 /**
  * Single full-bleed canvas with a WebGL2 context that re-renders the
@@ -19,17 +19,20 @@ export function CanvasLayer() {
     const renderer = new GLRenderer(canvas)
 
     let raf = 0
-    let lastTier: PrecisionTier = "f32"
     const tick = () => {
       const cssW = canvas.clientWidth
       const cssH = canvas.clientHeight
       if (cssW > 0 && cssH > 0) {
-        // Cap DPR at 2 — 3x phones don't gain much for 2.25x fragment cost.
-        const dpr = Math.min(2, window.devicePixelRatio || 1)
-        const bw = Math.max(1, Math.floor(cssW * dpr))
-        const bh = Math.max(1, Math.floor(cssH * dpr))
+        // 2x supersampling on top of the device pixel ratio, capped so we
+        // don't melt phones at DPR=3. Most desktops land at 2 css px → 4
+        // fragments; retina ends up at ~3.
+        const SS = 2
+        const dpr = window.devicePixelRatio || 1
+        const ratio = Math.min(3, dpr * SS)
+        const bw = Math.max(1, Math.floor(cssW * ratio))
+        const bh = Math.max(1, Math.floor(cssH * ratio))
         renderer.resize(bw, bh)
-        const { viewport, iterations, palette, setPrecisionTier } = useStore.getState()
+        const { viewport, iterations, palette } = useStore.getState()
         renderer.render({
           cx: viewport.cx,
           cy: viewport.cy,
@@ -39,11 +42,6 @@ export function CanvasLayer() {
           iterations: effectiveIterations(iterations, viewport.span),
           palette,
         })
-        const tier = renderer.currentTier()
-        if (tier !== lastTier) {
-          lastTier = tier
-          setPrecisionTier(tier)
-        }
       }
       raf = requestAnimationFrame(tick)
     }

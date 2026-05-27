@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import { subscribeWithSelector } from "zustand/middleware"
 
-import type { PrecisionTier, Viewport } from "../util/renderMath"
+import { clampSpan, type Viewport } from "../util/renderMath"
 import { DEFAULTS, parseHash, type Palette, writeHash } from "./hash"
 
 export type AppState = {
@@ -16,13 +16,12 @@ export type AppState = {
   sidebarOpen: boolean
   setSidebarOpen: (b: boolean) => void
 
-  precisionTier: PrecisionTier
-  setPrecisionTier: (t: PrecisionTier) => void
-
   resetView: () => void
 }
 
 const initialHash = parseHash()
+// URL hash may carry a span past the new zoom cap — snap it on load.
+initialHash.viewport.span = clampSpan(initialHash.viewport.span)
 const initialSidebar = (() => {
   try {
     const v = localStorage.getItem("mandelbrot.sidebarOpen")
@@ -35,7 +34,7 @@ const initialSidebar = (() => {
 export const useStore = create<AppState>()(
   subscribeWithSelector((set) => ({
     viewport: initialHash.viewport,
-    setViewport: (v) => set({ viewport: v }),
+    setViewport: (v) => set({ viewport: { ...v, span: clampSpan(v.span) } }),
 
     iterations: initialHash.iterations,
     setIterations: (n) => set({ iterations: Math.max(16, Math.min(4096, Math.round(n))) }),
@@ -52,9 +51,6 @@ export const useStore = create<AppState>()(
       }
       set({ sidebarOpen: b })
     },
-
-    precisionTier: "f32",
-    setPrecisionTier: (t) => set({ precisionTier: t }),
 
     resetView: () => {
       set({

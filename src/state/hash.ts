@@ -1,12 +1,14 @@
 /**
  * URL-hash persistence for viewport + palette + iterations.
  *
- * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>
+ * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>&sm=<0|1>&m=<hsv|iq>
  *
- * Defaults if absent: cx=-0.5, cy=0, span=3.5, it=512, p=0.6,0.8,1,1,0
+ * Defaults if absent: cx=-0.5, cy=0, span=3.5, it=512, p=0.6,0.8,1,0.3,0, sm=1, m=hsv
  */
 
 import type { Viewport } from "../util/renderMath"
+
+export type ColorMode = "hsv" | "iq"
 
 export type Palette = {
   hue: number
@@ -14,6 +16,8 @@ export type Palette = {
   val: number
   scale: number
   offset: number
+  smooth: boolean
+  mode: ColorMode
 }
 
 export type PersistedState = {
@@ -22,10 +26,23 @@ export type PersistedState = {
   palette: Palette
 }
 
+export const MODE_DEFAULTS: Record<ColorMode, { hue: number; scale: number }> = {
+  hsv: { hue: 0.0, scale: 0.25 },
+  iq: { hue: 0.95, scale: 0.83 },
+}
+
 export const DEFAULTS: PersistedState = {
-  viewport: { cx: -0.5, cy: 0, span: 3.5 },
+  viewport: { cx: -1.083917515, cy: 0.04043246738, span: 4.59824 },
   iterations: 512,
-  palette: { hue: 0.6, sat: 0.8, val: 1.0, scale: 1.0, offset: 0.0 },
+  palette: {
+    hue: MODE_DEFAULTS.iq.hue,
+    sat: 0.8,
+    val: 1.0,
+    scale: MODE_DEFAULTS.iq.scale,
+    offset: 0.0,
+    smooth: true,
+    mode: "iq",
+  },
 }
 
 function num(s: string | undefined, fallback: number): number {
@@ -57,6 +74,10 @@ export function parseHash(hash: string = window.location.hash): PersistedState {
     out.palette.scale = num(p[3], out.palette.scale)
     out.palette.offset = num(p[4], out.palette.offset)
   }
+  const sm = params.get("sm")
+  if (sm !== null) out.palette.smooth = sm !== "0"
+  const m = params.get("m")
+  if (m === "hsv" || m === "iq") out.palette.mode = m
   return out
 }
 
@@ -72,6 +93,8 @@ export function encodeHash(s: PersistedState): string {
     `s=${fmt(s.viewport.span, 6)}`,
     `it=${s.iterations}`,
     `p=${fmt(s.palette.hue)},${fmt(s.palette.sat)},${fmt(s.palette.val)},${fmt(s.palette.scale)},${fmt(s.palette.offset)}`,
+    `sm=${s.palette.smooth ? 1 : 0}`,
+    `m=${s.palette.mode}`,
   ]
   return "#" + parts.join("&")
 }

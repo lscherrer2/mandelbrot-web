@@ -10,10 +10,12 @@ uniform float uSat;
 uniform float uVal;
 uniform float uScale;
 uniform float uOffset;
+uniform int   uSmooth;
+uniform int   uMode;
 
 out vec4 fragColor;
 
-// Returns smooth iteration count, or -1.0 for interior points.
+// Returns iteration count (smooth if uSmooth!=0), or -1.0 for interior points.
 float mandelbrot(vec2 c, int maxIter) {
     // Main-cardioid + period-2 bulb early-out.
     float c2 = dot(c, c);
@@ -26,7 +28,9 @@ float mandelbrot(vec2 c, int maxIter) {
     for (int i = 0; i < maxIter; i++) {
         z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
         if (dot(z, z) > B*B) {
-            return n - log2(log2(dot(z, z))) + 4.0;
+            return (uSmooth != 0)
+                ? n - log2(log2(dot(z, z))) + 4.0
+                : n;
         }
         n += 1.0;
     }
@@ -45,8 +49,15 @@ void main() {
     vec2 p = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.x;
     vec2 c = uCenter + p * uSpanX;
     float l = mandelbrot(c, uMaxIter);
-    vec3 col = (l < 0.0)
-        ? vec3(0.0)
-        : hsv2rgb(vec3(uHue + l * 0.05 * uScale + uOffset, uSat, uVal));
+    vec3 col;
+    if (l < 0.0) {
+        col = vec3(0.0);
+    } else if (uMode == 1) {
+        // IQ cosine palette — see iquilezles.org/articles/palettes
+        col = 0.5 + 0.5 * cos(3.0 + l * 0.15 * uScale + uOffset * 6.2831853
+                              + vec3(0.0, 0.6, 1.0) + uHue * 6.2831853);
+    } else {
+        col = hsv2rgb(vec3(uHue + l * 0.05 * uScale + uOffset, uSat, uVal));
+    }
     fragColor = vec4(col, 1.0);
 }

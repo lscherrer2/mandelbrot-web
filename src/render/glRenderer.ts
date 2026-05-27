@@ -1,59 +1,26 @@
 import type { RenderParams } from "./types"
-import dfMathSource from "./dfMath.glsl?raw"
-import fragF32Source from "./mandelbrot.frag?raw"
-import fragDFTemplate from "./mandelbrot_df.frag?raw"
-import fragTFTemplate from "./mandelbrot_tf.frag?raw"
-import tfMathSource from "./tfMath.glsl?raw"
+import fragSource from "./mandelbrot.frag?raw"
 import vertSource from "./mandelbrot.vert?raw"
 
-import {
-  type PrecisionTier,
-  nextPrecisionTier,
-  splitDF,
-  splitTF,
-} from "../util/renderMath"
-
-type CommonUniforms = {
+type Uniforms = {
   uResolution: WebGLUniformLocation
+  uCenter: WebGLUniformLocation
+  uSpanX: WebGLUniformLocation
   uMaxIter: WebGLUniformLocation
   uHue: WebGLUniformLocation
   uSat: WebGLUniformLocation
   uVal: WebGLUniformLocation
   uScale: WebGLUniformLocation
   uOffset: WebGLUniformLocation
+  uSmooth: WebGLUniformLocation
+  uMode: WebGLUniformLocation
 }
-
-type F32Uniforms = CommonUniforms & {
-  uCenter: WebGLUniformLocation
-  uSpanX: WebGLUniformLocation
-}
-
-type DFUniforms = CommonUniforms & {
-  uCenterHi: WebGLUniformLocation
-  uCenterLo: WebGLUniformLocation
-  uSpanXHi: WebGLUniformLocation
-  uSpanXLo: WebGLUniformLocation
-}
-
-type TFUniforms = CommonUniforms & {
-  uCenterHi: WebGLUniformLocation
-  uCenterMid: WebGLUniformLocation
-  uCenterLo: WebGLUniformLocation
-  uSpanXHi: WebGLUniformLocation
-  uSpanXMid: WebGLUniformLocation
-  uSpanXLo: WebGLUniformLocation
-}
-
-type TierBundle =
-  | { tier: "f32"; program: WebGLProgram; uniforms: F32Uniforms }
-  | { tier: "df"; program: WebGLProgram; uniforms: DFUniforms }
-  | { tier: "tf"; program: WebGLProgram; uniforms: TFUniforms }
 
 export class GLRenderer {
   private gl: WebGL2RenderingContext
   private vao: WebGLVertexArrayObject
-  private bundles: { f32: TierBundle; df: TierBundle; tf: TierBundle }
-  private tier: PrecisionTier = "f32"
+  private program: WebGLProgram
+  private uniforms: Uniforms
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: false })
@@ -61,17 +28,21 @@ export class GLRenderer {
     this.gl = gl
 
     const vs = compile(gl, gl.VERTEX_SHADER, vertSource)
+    const fs = compile(gl, gl.FRAGMENT_SHADER, fragSource)
+    this.program = link(gl, vs, fs)
 
-    const f32Program = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, fragF32Source), false)
-    const dfSource = fragDFTemplate.replace("// @INCLUDE_DF_MATH", dfMathSource)
-    const dfProgram = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, dfSource), false)
-    const tfSource = fragTFTemplate.replace("// @INCLUDE_TF_MATH", tfMathSource)
-    const tfProgram = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, tfSource), true)
-
-    this.bundles = {
-      f32: { tier: "f32", program: f32Program, uniforms: locateF32(gl, f32Program) },
-      df: { tier: "df", program: dfProgram, uniforms: locateDF(gl, dfProgram) },
-      tf: { tier: "tf", program: tfProgram, uniforms: locateTF(gl, tfProgram) },
+    this.uniforms = {
+      uResolution: getUniform(gl, this.program, "uResolution"),
+      uCenter: getUniform(gl, this.program, "uCenter"),
+      uSpanX: getUniform(gl, this.program, "uSpanX"),
+      uMaxIter: getUniform(gl, this.program, "uMaxIter"),
+      uHue: getUniform(gl, this.program, "uHue"),
+      uSat: getUniform(gl, this.program, "uSat"),
+      uVal: getUniform(gl, this.program, "uVal"),
+      uScale: getUniform(gl, this.program, "uScale"),
+      uOffset: getUniform(gl, this.program, "uOffset"),
+      uSmooth: getUniform(gl, this.program, "uSmooth"),
+      uMode: getUniform(gl, this.program, "uMode"),
     }
 
     const vao = gl.createVertexArray()
@@ -86,55 +57,27 @@ export class GLRenderer {
     gl.viewport(0, 0, width, height)
   }
 
-  currentTier(): PrecisionTier {
-    return this.tier
-  }
-
   render(params: RenderParams): void {
-    const { gl, vao } = this
-    this.tier = nextPrecisionTier(this.tier, params.spanX)
-    const bundle = this.bundles[this.tier]
-    gl.useProgram(bundle.program)
+    const { gl, vao, uniforms } = this
+    gl.useProgram(this.program)
     gl.bindVertexArray(vao)
-    gl.uniform2f(bundle.uniforms.uResolution, params.width, params.height)
-    gl.uniform1i(bundle.uniforms.uMaxIter, params.iterations)
-    gl.uniform1f(bundle.uniforms.uHue, params.palette.hue)
-    gl.uniform1f(bundle.uniforms.uSat, params.palette.sat)
-    gl.uniform1f(bundle.uniforms.uVal, params.palette.val)
-    gl.uniform1f(bundle.uniforms.uScale, params.palette.scale)
-    gl.uniform1f(bundle.uniforms.uOffset, params.palette.offset)
-
-    if (bundle.tier === "f32") {
-      gl.uniform2f(bundle.uniforms.uCenter, params.cx, params.cy)
-      gl.uniform1f(bundle.uniforms.uSpanX, params.spanX)
-    } else if (bundle.tier === "df") {
-      const [cxHi, cxLo] = splitDF(params.cx)
-      const [cyHi, cyLo] = splitDF(params.cy)
-      const [sxHi, sxLo] = splitDF(params.spanX)
-      gl.uniform2f(bundle.uniforms.uCenterHi, cxHi, cyHi)
-      gl.uniform2f(bundle.uniforms.uCenterLo, cxLo, cyLo)
-      gl.uniform1f(bundle.uniforms.uSpanXHi, sxHi)
-      gl.uniform1f(bundle.uniforms.uSpanXLo, sxLo)
-    } else {
-      const [cxHi, cxMid, cxLo] = splitTF(params.cx)
-      const [cyHi, cyMid, cyLo] = splitTF(params.cy)
-      const [sxHi, sxMid, sxLo] = splitTF(params.spanX)
-      gl.uniform2f(bundle.uniforms.uCenterHi, cxHi, cyHi)
-      gl.uniform2f(bundle.uniforms.uCenterMid, cxMid, cyMid)
-      gl.uniform2f(bundle.uniforms.uCenterLo, cxLo, cyLo)
-      gl.uniform1f(bundle.uniforms.uSpanXHi, sxHi)
-      gl.uniform1f(bundle.uniforms.uSpanXMid, sxMid)
-      gl.uniform1f(bundle.uniforms.uSpanXLo, sxLo)
-    }
-
+    gl.uniform2f(uniforms.uResolution, params.width, params.height)
+    gl.uniform2f(uniforms.uCenter, params.cx, params.cy)
+    gl.uniform1f(uniforms.uSpanX, params.spanX)
+    gl.uniform1i(uniforms.uMaxIter, params.iterations)
+    gl.uniform1f(uniforms.uHue, params.palette.hue)
+    gl.uniform1f(uniforms.uSat, params.palette.sat)
+    gl.uniform1f(uniforms.uVal, params.palette.val)
+    gl.uniform1f(uniforms.uScale, params.palette.scale)
+    gl.uniform1f(uniforms.uOffset, params.palette.offset)
+    gl.uniform1i(uniforms.uSmooth, params.palette.smooth ? 1 : 0)
+    gl.uniform1i(uniforms.uMode, params.palette.mode === "iq" ? 1 : 0)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
   dispose(): void {
     const { gl } = this
-    gl.deleteProgram(this.bundles.f32.program)
-    gl.deleteProgram(this.bundles.df.program)
-    gl.deleteProgram(this.bundles.tf.program)
+    gl.deleteProgram(this.program)
     gl.deleteVertexArray(this.vao)
   }
 }
@@ -152,14 +95,7 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string): WebG
   return shader
 }
 
-// `deleteVS` should only be true on the final link — the vertex shader is
-// reused across all three programs.
-function link(
-  gl: WebGL2RenderingContext,
-  vs: WebGLShader,
-  fs: WebGLShader,
-  deleteVS: boolean,
-): WebGLProgram {
+function link(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram {
   const program = gl.createProgram()
   if (!program) throw new Error("Failed to create program")
   gl.attachShader(program, vs)
@@ -167,8 +103,8 @@ function link(
   gl.linkProgram(program)
   gl.detachShader(program, vs)
   gl.detachShader(program, fs)
+  gl.deleteShader(vs)
   gl.deleteShader(fs)
-  if (deleteVS) gl.deleteShader(vs)
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(program) ?? "(no log)"
     gl.deleteProgram(program)
@@ -185,46 +121,4 @@ function getUniform(
   const loc = gl.getUniformLocation(program, name)
   if (!loc) throw new Error(`Uniform '${name}' not found (probably optimized out)`)
   return loc
-}
-
-function locateCommon(gl: WebGL2RenderingContext, program: WebGLProgram): CommonUniforms {
-  return {
-    uResolution: getUniform(gl, program, "uResolution"),
-    uMaxIter: getUniform(gl, program, "uMaxIter"),
-    uHue: getUniform(gl, program, "uHue"),
-    uSat: getUniform(gl, program, "uSat"),
-    uVal: getUniform(gl, program, "uVal"),
-    uScale: getUniform(gl, program, "uScale"),
-    uOffset: getUniform(gl, program, "uOffset"),
-  }
-}
-
-function locateF32(gl: WebGL2RenderingContext, program: WebGLProgram): F32Uniforms {
-  return {
-    ...locateCommon(gl, program),
-    uCenter: getUniform(gl, program, "uCenter"),
-    uSpanX: getUniform(gl, program, "uSpanX"),
-  }
-}
-
-function locateDF(gl: WebGL2RenderingContext, program: WebGLProgram): DFUniforms {
-  return {
-    ...locateCommon(gl, program),
-    uCenterHi: getUniform(gl, program, "uCenterHi"),
-    uCenterLo: getUniform(gl, program, "uCenterLo"),
-    uSpanXHi: getUniform(gl, program, "uSpanXHi"),
-    uSpanXLo: getUniform(gl, program, "uSpanXLo"),
-  }
-}
-
-function locateTF(gl: WebGL2RenderingContext, program: WebGLProgram): TFUniforms {
-  return {
-    ...locateCommon(gl, program),
-    uCenterHi: getUniform(gl, program, "uCenterHi"),
-    uCenterMid: getUniform(gl, program, "uCenterMid"),
-    uCenterLo: getUniform(gl, program, "uCenterLo"),
-    uSpanXHi: getUniform(gl, program, "uSpanXHi"),
-    uSpanXMid: getUniform(gl, program, "uSpanXMid"),
-    uSpanXLo: getUniform(gl, program, "uSpanXLo"),
-  }
 }

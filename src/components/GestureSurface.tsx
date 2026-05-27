@@ -52,19 +52,38 @@ export function GestureSurface() {
           cy: v.cy + dy / pxPerUnit,
         })
       },
-      onPinch: ({ origin: [ox, oy], offset: [scale], memo }) => {
+      onPinch: ({ origin: [ox, oy], offset: [scale], memo, first }) => {
         const el = surfaceRef.current
         if (!el) return memo
         const rect = el.getBoundingClientRect()
         const sx = ox - rect.left
         const sy = oy - rect.top
-        const prevScale = (memo as number | undefined) ?? scale
-        if (prevScale > 0 && scale > 0 && scale !== prevScale) {
-          const factor = scale / prevScale
-          const v = useStore.getState().viewport
-          applyViewport(zoomAt(v, sx, sy, rect.width, rect.height, factor))
+        const prev = memo as { scale: number; ox: number; oy: number } | undefined
+        if (first || !prev) return { scale, ox, oy }
+
+        let v = useStore.getState().viewport
+
+        // Zoom by the change in scale, anchored at the current centroid.
+        if (prev.scale > 0 && scale > 0 && scale !== prev.scale) {
+          const factor = scale / prev.scale
+          v = zoomAt(v, sx, sy, rect.width, rect.height, factor)
         }
-        return scale
+
+        // Pan by centroid movement so two fingers moving together pan while
+        // pinching also zooms.
+        const dx = ox - prev.ox
+        const dy = oy - prev.oy
+        if (dx !== 0 || dy !== 0) {
+          const pxPerUnit = rect.width / v.span
+          v = {
+            ...v,
+            cx: v.cx - dx / pxPerUnit,
+            cy: v.cy + dy / pxPerUnit,
+          }
+        }
+
+        applyViewport(v)
+        return { scale, ox, oy }
       },
       onWheel: ({ event, delta: [, dy], pinching }) => {
         if (pinching) return
