@@ -27,11 +27,14 @@ export function pickZoom(viewportSpan: number): number {
 const ITER_RAMP_ZOOM = 12
 const ITER_PER_ZOOM = 64
 const MAX_EFFECTIVE_ITER = 16384
+// Flat headroom on the base count so low/medium zooms (0-5) resolve a bit more
+// detail. The depth ramp above stacks on top of this scaled base.
+const ITER_BASE_SCALE = 1.35
 
 export function effectiveIterations(baseIter: number, span: number): number {
   const zoom = pickZoom(span)
   const extra = Math.max(0, zoom - ITER_RAMP_ZOOM) * ITER_PER_ZOOM
-  return Math.min(MAX_EFFECTIVE_ITER, baseIter + extra)
+  return Math.min(MAX_EFFECTIVE_ITER, Math.round(baseIter * ITER_BASE_SCALE) + extra)
 }
 
 /** Convert a screen-pixel coordinate to a complex-plane coordinate. */

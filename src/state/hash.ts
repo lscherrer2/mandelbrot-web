@@ -28,7 +28,7 @@ export type PersistedState = {
 
 export const MODE_DEFAULTS: Record<ColorMode, { hue: number; scale: number }> = {
   hsv: { hue: 0.0, scale: 0.25 },
-  iq: { hue: 0.95, scale: 0.83 },
+  iq: { hue: 1.0, scale: 0.3 },
 }
 
 export const DEFAULTS: PersistedState = {
