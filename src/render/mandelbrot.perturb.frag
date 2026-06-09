@@ -22,15 +22,11 @@ uniform sampler2D uRefOrbit; // RG32F, texel n = Z_n (Re,Im)
 uniform int   uRefW;         // reference texture width
 uniform int   uMaxRefIter;   // last valid reference index (rebase wraps at this)
 
-uniform float uHue;
-uniform float uSat;
-uniform float uVal;
-uniform float uScale;
-uniform float uOffset;
 uniform int   uSmooth;
-uniform int   uMode;
 
 out vec4 fragColor;
+
+//#include palette.glsl
 
 const float R2 = 65536.0; // bailout² (R = 256, large → smooth coloring)
 
@@ -52,11 +48,6 @@ void renorm(inout vec2 d, inout float e) {
     }
 }
 
-vec3 hsv2rgb(vec3 h) {
-    vec3 k = mod(vec3(5.0, 3.0, 1.0) + h.x * 6.0, 6.0);
-    return h.z - h.z * h.y * clamp(min(k, 4.0 - k), 0.0, 1.0);
-}
-
 void main() {
     vec2 p = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.x;
 
@@ -72,6 +63,9 @@ void main() {
     int   m   = 0;
     int   esc = -1;
     float zz  = 0.0;
+    vec2  zEsc = vec2(0.0);
+    vec2  der    = vec2(0.0); // dz/dc as mantissa·2^derExp (see relief note)
+    float derExp = 0.0;
 
     for (int iter = 0; iter < uMaxIter; iter++) {
         vec2 Z = fetchZ(m);
@@ -81,7 +75,20 @@ void main() {
         vec2 scaled = d * exp2(ex);
         vec2 z = Z + scaled;
         zz = dot(z, z);
-        if (zz > R2) { esc = iter; break; }
+        if (zz > R2) { esc = iter; zEsc = z; break; }
+
+        // Relief shading needs der = dz/dc via der' = 2·z·der + 1, using the
+        // reconstructed z (rebasing doesn't touch it). The true |der| at depth
+        // is ~1/span — far beyond float32 — so the magnitude is carried as
+        // mantissa·2^derExp; reliefT cancels derExp against log2(pixel size).
+        // (The +1 is below float eps long before the rescale threshold.)
+        if (uRelief > 0.0) {
+            der = 2.0 * cmul(z, der) + vec2(1.0, 0.0);
+            if (max(abs(der.x), abs(der.y)) > 1.1e12) { // 2^40
+                der *= exp2(-40.0);
+                derExp += 40.0;
+            }
+        }
 
         // Rebase (Zhuoran): when the running orbit |z| drops below |δ| (glitch
         // onset) or the reference is exhausted, fold z back into δ and restart
@@ -117,14 +124,13 @@ void main() {
         l = float(esc);
     }
 
-    vec3 col;
-    if (l < 0.0) {
-        col = vec3(0.0);
-    } else if (uMode == 1) {
-        col = 0.5 + 0.5 * cos(3.0 + l * 0.15 * uScale + uOffset * 6.2831853
-                              + vec3(0.0, 0.6, 1.0) + uHue * 6.2831853);
-    } else {
-        col = hsv2rgb(vec3(uHue + l * 0.05 * uScale + uOffset, uSat, uVal));
+    vec3 col = vec3(0.0);
+    if (l >= 0.0) {
+        col = shade(l);
+        if (uRelief > 0.0) {
+            float log2Px = uSpanExp + log2(uSpanMant) - log2(uResolution.x);
+            col = applyRelief(col, reliefT(zEsc, der, derExp, log2Px));
+        }
     }
     fragColor = vec4(col, 1.0);
 }

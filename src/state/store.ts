@@ -10,10 +10,41 @@ import {
   toDecimalString,
   toNumber,
 } from "../highprec/fixedpoint"
-import { DEFAULTS, parseHash, type Palette, writeHash } from "./hash"
+import { DEFAULTS, encodeHash, parseHash, type Palette, writeHash } from "./hash"
 
 /** High-precision view center (fixed-point), the source of truth for cx/cy. */
 export type CenterHP = { x: Fixed; y: Fixed }
+
+export type Bookmark = {
+  id: string
+  name: string
+  hash: string
+}
+
+const BOOKMARK_KEY = "mandelbrot.bookmarks"
+
+function loadBookmarksFromStorage(): Bookmark[] {
+  try {
+    const raw = localStorage.getItem(BOOKMARK_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (b): b is Bookmark =>
+        typeof b?.id === "string" && typeof b?.name === "string" && typeof b?.hash === "string",
+    )
+  } catch {
+    return []
+  }
+}
+
+function saveBookmarksToStorage(bookmarks: Bookmark[]): void {
+  try {
+    localStorage.setItem(BOOKMARK_KEY, JSON.stringify(bookmarks))
+  } catch {
+    /* ignore */
+  }
+}
 
 export type AppState = {
   viewport: Viewport
@@ -24,11 +55,21 @@ export type AppState = {
   panByPixels: (dpx: number, dpy: number, vw: number) => void
   /** Zoom by `factor` (>1 = in) keeping screen point (sx,sy) fixed. */
   zoomAtPixel: (sx: number, sy: number, vw: number, vh: number, factor: number) => void
+  /** Navigate to an arbitrary-precision decimal coordinate, keeping current span. */
+  navigateTo: (re: string, im: string) => void
 
   iterations: number
   setIterations: (n: number) => void
   palette: Palette
   setPalette: (p: Partial<Palette>) => void
+
+  panLocked: boolean
+  setPanLocked: (b: boolean) => void
+
+  bookmarks: Bookmark[]
+  saveBookmark: (name: string) => void
+  deleteBookmark: (id: string) => void
+  loadBookmark: (b: Bookmark) => void
 
   sidebarOpen: boolean
   setSidebarOpen: (b: boolean) => void
@@ -105,11 +146,68 @@ export const useStore = create<AppState>()(
         return { centerHP, viewport: deriveViewport(centerHP, newSpan) }
       }),
 
+    navigateTo: (re, im) =>
+      set((s) => {
+        const centerHP = {
+          x: fromDecimalString(re, FRAC_HP),
+          y: fromDecimalString(im, FRAC_HP),
+        }
+        return { centerHP, viewport: deriveViewport(centerHP, s.viewport.span) }
+      }),
+
     iterations: initialHash.iterations,
     setIterations: (n) => set({ iterations: Math.max(16, Math.min(4096, Math.round(n))) }),
 
     palette: initialHash.palette,
     setPalette: (p) => set((s) => ({ palette: { ...s.palette, ...p } })),
+
+    panLocked: initialHash.panLocked,
+    setPanLocked: (b) => set({ panLocked: b }),
+
+    bookmarks: loadBookmarksFromStorage(),
+    saveBookmark: (name) =>
+      set((s) => {
+        const digits = Math.min(330, Math.max(16, Math.ceil(-Math.log10(s.viewport.span)) + 12))
+        const centerStr = {
+          re: toDecimalString(s.centerHP.x, FRAC_HP, digits),
+          im: toDecimalString(s.centerHP.y, FRAC_HP, digits),
+        }
+        const hash = encodeHash({
+          viewport: s.viewport,
+          iterations: s.iterations,
+          palette: s.palette,
+          panLocked: s.panLocked,
+          centerStr,
+        })
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2)
+        const bookmarks = [...s.bookmarks, { id, name, hash }]
+        saveBookmarksToStorage(bookmarks)
+        return { bookmarks }
+      }),
+    deleteBookmark: (id) =>
+      set((s) => {
+        const bookmarks = s.bookmarks.filter((b) => b.id !== id)
+        saveBookmarksToStorage(bookmarks)
+        return { bookmarks }
+      }),
+    loadBookmark: (b) =>
+      set(() => {
+        const parsed = parseHash(b.hash)
+        const span = clampSpan(parsed.viewport.span)
+        const centerHP = parsed.centerStr
+          ? {
+              x: fromDecimalString(parsed.centerStr.re, FRAC_HP),
+              y: fromDecimalString(parsed.centerStr.im, FRAC_HP),
+            }
+          : { x: fromNumber(parsed.viewport.cx, FRAC_HP), y: fromNumber(parsed.viewport.cy, FRAC_HP) }
+        return {
+          centerHP,
+          viewport: deriveViewport(centerHP, span),
+          iterations: parsed.iterations,
+          palette: parsed.palette,
+          panLocked: parsed.panLocked,
+        }
+      }),
 
     sidebarOpen: initialSidebar,
     setSidebarOpen: (b) => {
@@ -131,6 +229,7 @@ export const useStore = create<AppState>()(
         viewport: deriveViewport(centerHP, DEFAULTS.viewport.span),
         iterations: DEFAULTS.iterations,
         palette: { ...DEFAULTS.palette },
+        panLocked: DEFAULTS.panLocked,
       })
     },
   })),
@@ -142,18 +241,22 @@ useStore.subscribe(
     centerHP: s.centerHP,
     iterations: s.iterations,
     palette: s.palette,
+    panLocked: s.panLocked,
   }),
-  ({ viewport, centerHP, iterations, palette }) => {
+  ({ viewport, centerHP, iterations, palette, panLocked }) => {
     // Enough fractional digits to pin the center at the current depth.
     const digits = Math.min(330, Math.max(16, Math.ceil(-Math.log10(viewport.span)) + 12))
     const centerStr = {
       re: toDecimalString(centerHP.x, FRAC_HP, digits),
       im: toDecimalString(centerHP.y, FRAC_HP, digits),
     }
-    writeHash({ viewport, iterations, palette, centerStr })
+    writeHash({ viewport, iterations, palette, panLocked, centerStr })
   },
   {
     equalityFn: (a, b) =>
-      a.viewport === b.viewport && a.iterations === b.iterations && a.palette === b.palette,
+      a.viewport === b.viewport &&
+      a.iterations === b.iterations &&
+      a.palette === b.palette &&
+      a.panLocked === b.panLocked,
   },
 )

@@ -4,13 +4,12 @@ import { useEffect, useRef } from "react"
 import { useStore } from "../state/store"
 import { BASE_SPAN, MIN_SPAN } from "../util/renderMath"
 
-// Cumulative pinch scale needed to drive the view from BASE_SPAN down to the
-// renderer's deep-zoom floor (MIN_SPAN ≈ 4e-301). @use-gesture clamps the pinch
-// offset to scaleBounds, so this must reach the architecture's depth limit —
-// otherwise pinch zoom stalls at a shallow wall and only a refresh (which resets
-// the accumulator) lets you continue. The store's clampSpan enforces the real
-// floor; this bound just keeps the input from capping short of it.
+// Pinch scales are only used as ratios inside a single gesture. Resetting the
+// gesture offset to 1 avoids a stale cumulative scale hitting @use-gesture's
+// bounds after several separate pinches. The bounds are intentionally huge so
+// the input layer does not cap before the renderer's own zoom limits.
 const MAX_PINCH_SCALE = BASE_SPAN / MIN_SPAN
+const MIN_PINCH_SCALE = 1 / MAX_PINCH_SCALE
 
 /**
  * Invisible div that sits on top of the canvas and catches pinch / drag / wheel
@@ -42,27 +41,28 @@ export function GestureSurface() {
         if (pinching) return
         const el = surfaceRef.current
         if (!el) return
-        useStore.getState().panByPixels(dx, dy, el.clientWidth)
+        const store = useStore.getState()
+        if (store.panLocked) return
+        store.panByPixels(dx, dy, el.clientWidth)
       },
       onPinch: ({ origin: [ox, oy], offset: [scale], memo, first }) => {
         const el = surfaceRef.current
         if (!el) return memo
         const rect = el.getBoundingClientRect()
-        const sx = ox - rect.left
-        const sy = oy - rect.top
         const prev = memo as { scale: number; ox: number; oy: number } | undefined
         if (first || !prev) return { scale, ox, oy }
 
         const store = useStore.getState()
-        // Zoom by the change in scale, anchored at the current centroid.
         if (prev.scale > 0 && scale > 0 && scale !== prev.scale) {
+          // When locked, zoom at screen center so the locked point never drifts.
+          const sx = store.panLocked ? rect.width / 2 : ox - rect.left
+          const sy = store.panLocked ? rect.height / 2 : oy - rect.top
           store.zoomAtPixel(sx, sy, rect.width, rect.height, scale / prev.scale)
         }
-        // Pan by centroid movement (two fingers translating while pinching).
-        const dx = ox - prev.ox
-        const dy = oy - prev.oy
-        if (dx !== 0 || dy !== 0) {
-          useStore.getState().panByPixels(dx, dy, rect.width)
+        if (!store.panLocked) {
+          const dx = ox - prev.ox
+          const dy = oy - prev.oy
+          if (dx !== 0 || dy !== 0) store.panByPixels(dx, dy, rect.width)
         }
         return { scale, ox, oy }
       },
@@ -72,25 +72,32 @@ export function GestureSurface() {
         if (!el) return
         event.preventDefault()
         const rect = el.getBoundingClientRect()
-        const sx = event.clientX - rect.left
-        const sy = event.clientY - rect.top
-        // Each notch is ~100px. Negative dy = scroll up = zoom in.
+        const store = useStore.getState()
+        // When locked, zoom at screen center so the locked point stays centered.
+        const sx = store.panLocked ? rect.width / 2 : event.clientX - rect.left
+        const sy = store.panLocked ? rect.height / 2 : event.clientY - rect.top
         const factor = Math.pow(1.2, -dy / 100)
-        useStore.getState().zoomAtPixel(sx, sy, rect.width, rect.height, factor)
+        store.zoomAtPixel(sx, sy, rect.width, rect.height, factor)
       },
     },
     {
       target: surfaceRef,
       eventOptions: { passive: false },
       drag: { filterTaps: true, pointer: { keys: false } },
-      pinch: { scaleBounds: { min: 0.001, max: MAX_PINCH_SCALE }, rubberband: false },
+      pinch: {
+        from: () => [1, 0],
+        scaleBounds: { min: MIN_PINCH_SCALE, max: MAX_PINCH_SCALE },
+        rubberband: false,
+      },
     },
   )
+
+  const panLocked = useStore((s) => s.panLocked)
 
   return (
     <div
       ref={surfaceRef}
-      className="absolute inset-0 cursor-grab active:cursor-grabbing"
+      className={`absolute inset-0 ${panLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
       style={{ touchAction: "none" }}
     />
   )

@@ -51,7 +51,11 @@ export function pickZoom(viewportSpan: number): number {
 // scale them with depth. Deep (Tier C) zooms need far more — the ramp keeps
 // climbing and the cap is high (this also sets the reference-orbit length).
 const ITER_RAMP_ZOOM = 12
-const ITER_PER_ZOOM = 96
+const ITER_PER_ZOOM = 160
+// Deep (Tier C) locations need iterations growing faster than linearly with
+// zoom depth — minibrots near the boundary escape slowly, so a linear ramp
+// reads as solid black at depth. The quadratic term keeps headroom climbing.
+const ITER_QUAD_PER_ZOOM = 0.75
 const MAX_EFFECTIVE_ITER = 100000
 // Flat headroom on the base count so low/medium zooms (0-5) resolve a bit more
 // detail. The depth ramp above stacks on top of this scaled base.
@@ -59,8 +63,23 @@ const ITER_BASE_SCALE = 1.35
 
 export function effectiveIterations(baseIter: number, span: number): number {
   const zoom = pickZoom(span)
-  const extra = Math.max(0, zoom - ITER_RAMP_ZOOM) * ITER_PER_ZOOM
-  return Math.min(MAX_EFFECTIVE_ITER, Math.round(baseIter * ITER_BASE_SCALE) + extra)
+  const d = Math.max(0, zoom - ITER_RAMP_ZOOM)
+  const extra = d * ITER_PER_ZOOM + d * d * ITER_QUAD_PER_ZOOM
+  return Math.min(MAX_EFFECTIVE_ITER, Math.round(baseIter * ITER_BASE_SCALE) + Math.round(extra))
+}
+
+// Depth-adaptive palette compression. Deeper views escape at ever-higher
+// iteration counts (the ramp above), so a fixed color scale cycles faster and
+// faster — bands get visually denser with zoom. Shrinking the effective scale
+// as the iteration budget grows keeps band frequency roughly steady. The
+// exponent < 1 makes the compensation partial ("slight"); 1 would fully
+// flatten deep views.
+const DEPTH_SCALE_EXP = 0.5
+
+export function depthScaleFactor(baseIter: number, span: number): number {
+  const base = effectiveIterations(baseIter, BASE_SPAN)
+  const eff = effectiveIterations(baseIter, span)
+  return Math.pow(base / eff, DEPTH_SCALE_EXP)
 }
 
 /** Convert a screen-pixel coordinate to a complex-plane coordinate. */

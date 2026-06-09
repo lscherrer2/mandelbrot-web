@@ -10,6 +10,7 @@ import { useRef } from "react"
 
 import { useStore } from "../state/store"
 
+import { BookmarksPanel } from "./BookmarksPanel"
 import { PalettePanel } from "./PalettePanel"
 import { ViewPanel } from "./ViewPanel"
 
@@ -93,6 +94,7 @@ export function Sidebar() {
         </header>
         <PalettePanel />
         <ViewPanel />
+        <BookmarksPanel />
         <footer className="px-4 py-3 text-[10px] text-zinc-600">
           drag to pan · pinch / scroll to zoom
         </footer>

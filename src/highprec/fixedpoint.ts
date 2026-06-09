@@ -71,10 +71,13 @@ export function toNumber(v: Fixed, frac: number): number {
 }
 
 /**
- * Fast, approximate conversion to `double` for the orbit hot loop. Keeps ~40
- * significant bits — far more than the float32 texture that consumes it — by
- * extracting only the top chunk of the BigInt instead of its full bit length.
- * Assumes |value| is O(1) (true for orbit points, which are bounded by bailout).
+ * Fast conversion to `double` for the orbit hot loop. The fast path extracts
+ * the top chunk above 2^-40 — cheap, and plenty for O(1) orbit points. Values
+ * below ~2^-10 would keep <30 significant bits that way, so they fall back to
+ * the exact conversion. That matters: near-axis deep zooms have reference
+ * orbits passing within ~1e-14 of 0, and those close returns must retain full
+ * float32 *relative* precision or the GPU's rebasing reads a corrupted
+ * reference and renders displaced "glitch" seams.
  */
 export function toFloat32(v: Fixed, frac: number): number {
   if (v === 0n) return 0
@@ -82,6 +85,7 @@ export function toFloat32(v: Fixed, frac: number): number {
   const a = neg ? -v : v
   const drop = frac - 40
   const scaled = drop > 0 ? Number(a >> BigInt(drop)) : Number(a << BigInt(-drop))
+  if (scaled < 0x40000000 /* 2^30 ⇒ |value| < 2^-10 */) return toNumber(v, frac)
   const val = scaled * Math.pow(2, -40)
   return neg ? -val : val
 }

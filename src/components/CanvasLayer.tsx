@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react"
 
 import { GLRenderer } from "../render/glRenderer"
+import type { Palette } from "../state/hash"
 import { useStore } from "../state/store"
 import { effectiveIterations, TIER_DIRECT_MIN_SPAN } from "../util/renderMath"
 import { fracBitsFor, FRAC_HP, type Fixed, toDecimalString, toNumber } from "../highprec/fixedpoint"
@@ -21,13 +22,40 @@ const PREVIEW_STEP_BUDGET = 6e8 // ~fragment·iteration steps per preview frame
 const PREVIEW_MIN_W = 120
 const SHARP_SCALES = [0.5, 1.0] // progressive resolution once the view settles
 
+// Decoupled pipeline: perturbation passes render into an offscreen texture in
+// fence-gated strips (at most ~one strip queued on the GPU at a time), and the
+// freshest *finished* texture is blitted to the canvas through the transform
+// from its viewport to the live one. Interaction therefore never waits on the
+// fractal — zoom/pan/sliders move the cheap blit while renders land async.
+// The idle budget also bounds the worst-case hitch when interaction resumes
+// mid-sharpen (one already-queued strip must drain before the first blit).
+const MOVING_TICK_STEPS = 2e8 // strip budget while interacting (GPU stays preemptible)
+const IDLE_TICK_STEPS = 1e9 // strip budget once settled (throughput over latency)
+
+/** An in-flight deep-tier render, pinned to the viewport/params at submit. */
+type DeepJob = {
+  x: Fixed
+  y: Fixed
+  span: number
+  bw: number
+  bh: number
+  iters: number
+  palette: Palette
+  biasX: number
+  biasY: number
+  nextRow: number
+  sharp: boolean // counts toward the sharpStep progression on completion
+  scaleStep: number
+}
+
 /**
  * Full-bleed WebGL2 canvas. Each animation frame it picks a render tier from
  * the current span: the original float32 shader for shallow zoom (unchanged hot
  * path), or the perturbation shader for deep zoom. The deep tier is driven by a
  * Web Worker that computes the reference orbit, and renders adaptively — a fast
  * low-res preview while interacting, progressively sharpened once the view is
- * still — so zoom/pan stay responsive even when a full-quality frame is slow.
+ * still. Deep renders run decoupled from the canvas (see DeepJob pipeline
+ * above) so zoom/pan stay responsive even when a full-quality frame is slow.
  */
 export function CanvasLayer() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -59,6 +87,12 @@ export function CanvasLayer() {
     let sharpStep = 0
     let sharpDone = false
 
+    // Deep-tier render pipeline state.
+    let job: DeepJob | null = null
+    let front: { x: Fixed; y: Fixed; span: number } | null = null
+    let frontDirty = false
+    let lastStart: { x: Fixed; y: Fixed; span: number; sig: string } | null = null
+
     const invalidateSharp = () => {
       sharpStep = 0
       sharpDone = false
@@ -70,6 +104,9 @@ export function CanvasLayer() {
       if (!lastReq || res.reqId !== lastReq.reqId) return // superseded
       renderer.setOrbit(res.orbit, res.maxRefIter)
       loadedAnchor = { x: lastReq.x, y: lastReq.y }
+      // The orbit texture changed under any in-flight job — restart it.
+      job = null
+      lastStart = null
       invalidateSharp() // re-sharpen with the fresh orbit
     }
 
@@ -83,11 +120,20 @@ export function CanvasLayer() {
         const span = st.viewport.span
         const pal = st.palette
         const iters = effectiveIterations(st.iterations, span)
+        const palDraw = pal
         const dpr = window.devicePixelRatio || 1
 
         // Tier selection with hysteresis to avoid flicker at the boundary.
+        const prevTier = tier
         if (span < TIER_DIRECT_MIN_SPAN) tier = "perturb"
         else if (span > TIER_DIRECT_MIN_SPAN * 2) tier = "direct"
+        if (tier === "perturb" && prevTier === "direct") {
+          // Fresh deep session: nothing rendered yet at this depth. The canvas
+          // keeps the last direct frame until the first preview lands.
+          job = null
+          front = null
+          lastStart = null
+        }
 
         // The view (center/zoom/size) moved → drop to preview + invalidate sharp.
         const viewMoved =
@@ -104,14 +150,20 @@ export function CanvasLayer() {
           lastCssW = cssW
           lastCssH = cssH
           invalidateSharp()
+          if (job?.sharp) job = null // long render of a stale view — abandon it
         }
-        // Palette / iteration changes don't move the view but still need a redraw.
+        // Palette / iteration changes don't move the view but still need a
+        // redraw. Treated as motion so slider drags get cheap preview renders
+        // (sharpening only after the slider settles) instead of blocking on
+        // full-quality frames.
         const paramsSig = `${pal.hue},${pal.sat},${pal.val},${pal.scale},${pal.offset},${
           pal.smooth ? 1 : 0
         },${pal.mode},${st.iterations}`
         if (paramsSig !== lastParamsSig) {
           lastParamsSig = paramsSig
+          lastMoveTime = now
           invalidateSharp()
+          if (job?.sharp) job = null // its colors are already stale
         }
         const moving = now - lastMoveTime < SETTLE_MS
 
@@ -129,14 +181,14 @@ export function CanvasLayer() {
             width: bw,
             height: bh,
             iterations: iters,
-            palette: pal,
+            palette: palDraw,
           })
           raf = requestAnimationFrame(tick)
           return
         }
 
-        // Deep tier. Settled and already sharp → nothing to redo; keep the frame.
-        if (!moving && sharpDone) {
+        // Deep tier. Settled, sharp, nothing in flight → keep the frame as-is.
+        if (!moving && sharpDone && job === null && !frontDirty) {
           raf = requestAnimationFrame(tick)
           return
         }
@@ -187,42 +239,106 @@ export function CanvasLayer() {
           return
         }
 
-        // Resolution + iteration budget for this frame.
-        let bw: number
-        let bh: number
-        const aspect = cssW / cssH
-        if (moving) {
-          // Cheap preview: full iterations, resolution scaled to a work budget.
-          const frags = Math.max(
-            PREVIEW_MIN_W * PREVIEW_MIN_W,
-            PREVIEW_STEP_BUDGET / Math.max(iters, 1),
-          )
-          let pw = Math.round(Math.sqrt(frags * aspect))
-          pw = Math.max(PREVIEW_MIN_W, Math.min(pw, sharpW))
-          bw = pw
-          bh = Math.max(1, Math.round(pw / aspect))
-        } else {
-          // Idle: progressively sharpen (half-res → full-res), full iterations.
-          const s = SHARP_SCALES[Math.min(sharpStep, SHARP_SCALES.length - 1)]
-          bw = Math.max(1, Math.round(sharpW * s))
-          bh = Math.max(1, Math.round(sharpH * s))
+        // Advance the in-flight job: submit the next fence-gated strip, or —
+        // once the GPU has drained the last strip — promote it to front.
+        if (job && renderer.jobReady()) {
+          if (job.nextRow >= job.bh) {
+            renderer.finishPerturbJob()
+            front = { x: job.x, y: job.y, span: job.span }
+            frontDirty = true
+            if (job.sharp) {
+              sharpStep = job.scaleStep + 1
+              if (sharpStep >= SHARP_SCALES.length) sharpDone = true
+            }
+            job = null
+          } else {
+            const budget = moving ? MOVING_TICK_STEPS : IDLE_TICK_STEPS
+            const rows = Math.min(
+              job.bh - job.nextRow,
+              Math.max(1, Math.floor(budget / (job.iters * job.bw))),
+            )
+            renderer.renderPerturbStrip(
+              {
+                tier: "perturb",
+                cx: 0,
+                cy: 0,
+                spanX: job.span,
+                width: job.bw,
+                height: job.bh,
+                iterations: job.iters,
+                palette: job.palette,
+                biasX: job.biasX,
+                biasY: job.biasY,
+              },
+              job.nextRow,
+              rows,
+            )
+            job.nextRow += rows
+          }
         }
-        renderer.resize(bw, bh)
-        renderer.render({
-          tier: "perturb",
-          cx: 0,
-          cy: 0,
-          spanX: span,
-          width: bw,
-          height: bh,
-          iterations: iters,
-          palette: pal,
-          biasX: qx,
-          biasY: qy,
-        })
-        if (!moving) {
-          sharpStep++
-          if (sharpStep >= SHARP_SCALES.length) sharpDone = true
+
+        // Start the next job: a preview pinned to the live viewport while
+        // moving, or the next sharpening pass once settled.
+        if (job === null) {
+          const startJob = (bw: number, bh: number, sharp: boolean, scaleStep: number) => {
+            renderer.beginPerturbJob(bw, bh)
+            job = {
+              x: st.centerHP.x,
+              y: st.centerHP.y,
+              span,
+              bw,
+              bh,
+              iters,
+              palette: palDraw,
+              biasX: qx,
+              biasY: qy,
+              nextRow: 0,
+              sharp,
+              scaleStep,
+            }
+            lastStart = { x: st.centerHP.x, y: st.centerHP.y, span, sig: paramsSig }
+          }
+          if (moving) {
+            // Only re-preview if the view/params changed since the last start.
+            const stale =
+              !lastStart ||
+              lastStart.x !== st.centerHP.x ||
+              lastStart.y !== st.centerHP.y ||
+              lastStart.span !== span ||
+              lastStart.sig !== paramsSig
+            if (stale) {
+              // Cheap preview: full iterations, resolution scaled to a work budget.
+              const aspect = cssW / cssH
+              const frags = Math.max(
+                PREVIEW_MIN_W * PREVIEW_MIN_W,
+                PREVIEW_STEP_BUDGET / Math.max(iters, 1),
+              )
+              let pw = Math.round(Math.sqrt(frags * aspect))
+              pw = Math.max(PREVIEW_MIN_W, Math.min(pw, sharpW))
+              startJob(pw, Math.max(1, Math.round(pw / aspect)), false, 0)
+            }
+          } else if (!sharpDone) {
+            // Idle: progressively sharpen (half-res → full-res), full iterations.
+            const step = Math.min(sharpStep, SHARP_SCALES.length - 1)
+            const s = SHARP_SCALES[step]
+            startJob(
+              Math.max(1, Math.round(sharpW * s)),
+              Math.max(1, Math.round(sharpH * s)),
+              true,
+              step,
+            )
+          }
+        }
+
+        // Present: blit the freshest finished frame through the viewport
+        // transform. Cheap, so it runs every frame during interaction — this
+        // is what keeps zooming fluid while renders are still cooking.
+        if (front && (moving || frontDirty)) {
+          const offX = toNumber(st.centerHP.x - front.x, FRAC_HP) / front.span
+          const offY = toNumber(st.centerHP.y - front.y, FRAC_HP) / front.span
+          renderer.resize(sharpW, sharpH)
+          renderer.blitFront(sharpW, sharpH, span / front.span, offX, offY)
+          frontDirty = false
         }
       }
       raf = requestAnimationFrame(tick)
