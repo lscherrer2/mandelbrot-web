@@ -2,21 +2,26 @@ import { useGesture } from "@use-gesture/react"
 import { useEffect, useRef } from "react"
 
 import { useStore } from "../state/store"
-import { zoomAt, type Viewport } from "../util/renderMath"
+import { BASE_SPAN, MIN_SPAN } from "../util/renderMath"
+
+// Cumulative pinch scale needed to drive the view from BASE_SPAN down to the
+// renderer's deep-zoom floor (MIN_SPAN ≈ 4e-301). @use-gesture clamps the pinch
+// offset to scaleBounds, so this must reach the architecture's depth limit —
+// otherwise pinch zoom stalls at a shallow wall and only a refresh (which resets
+// the accumulator) lets you continue. The store's clampSpan enforces the real
+// floor; this bound just keeps the input from capping short of it.
+const MAX_PINCH_SCALE = BASE_SPAN / MIN_SPAN
 
 /**
- * Invisible div that sits on top of the tile layer and catches pinch / drag
- * / wheel input. Writes the new viewport to the store and asks the pipeline
- * for a new render (debounced).
- *
- * No React state is held here; gesture handlers read/write the store directly.
+ * Invisible div that sits on top of the canvas and catches pinch / drag / wheel
+ * input. Gesture handlers write to the store via delta-based actions
+ * (panByPixels / zoomAtPixel) so the high-precision center stays exact even at
+ * extreme zoom — the deltas are tiny but accumulate losslessly in fixed-point.
  */
 export function GestureSurface() {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
 
-  // Suppress browser pinch-zoom of the page itself. @use-gesture's
-  // `eventOptions.passive: false` handles this for the wheel/pinch events
-  // it owns, but Safari's gesturestart still needs an explicit block.
+  // Suppress browser pinch-zoom of the page itself.
   useEffect(() => {
     const el = surfaceRef.current
     if (!el) return
@@ -31,26 +36,13 @@ export function GestureSurface() {
     }
   }, [])
 
-  const applyViewport = (next: Viewport) => {
-    useStore.getState().setViewport(next)
-  }
-
   useGesture(
     {
       onDrag: ({ delta: [dx, dy], pinching }) => {
         if (pinching) return
         const el = surfaceRef.current
         if (!el) return
-        const vw = el.clientWidth
-        const v = useStore.getState().viewport
-        const pxPerUnit = vw / v.span
-        // Drag-down (dy > 0) reveals what was above on screen, which is
-        // higher complex-y under the math convention — so cy INCREASES.
-        applyViewport({
-          ...v,
-          cx: v.cx - dx / pxPerUnit,
-          cy: v.cy + dy / pxPerUnit,
-        })
+        useStore.getState().panByPixels(dx, dy, el.clientWidth)
       },
       onPinch: ({ origin: [ox, oy], offset: [scale], memo, first }) => {
         const el = surfaceRef.current
@@ -61,28 +53,17 @@ export function GestureSurface() {
         const prev = memo as { scale: number; ox: number; oy: number } | undefined
         if (first || !prev) return { scale, ox, oy }
 
-        let v = useStore.getState().viewport
-
+        const store = useStore.getState()
         // Zoom by the change in scale, anchored at the current centroid.
         if (prev.scale > 0 && scale > 0 && scale !== prev.scale) {
-          const factor = scale / prev.scale
-          v = zoomAt(v, sx, sy, rect.width, rect.height, factor)
+          store.zoomAtPixel(sx, sy, rect.width, rect.height, scale / prev.scale)
         }
-
-        // Pan by centroid movement so two fingers moving together pan while
-        // pinching also zooms.
+        // Pan by centroid movement (two fingers translating while pinching).
         const dx = ox - prev.ox
         const dy = oy - prev.oy
         if (dx !== 0 || dy !== 0) {
-          const pxPerUnit = rect.width / v.span
-          v = {
-            ...v,
-            cx: v.cx - dx / pxPerUnit,
-            cy: v.cy + dy / pxPerUnit,
-          }
+          useStore.getState().panByPixels(dx, dy, rect.width)
         }
-
-        applyViewport(v)
         return { scale, ox, oy }
       },
       onWheel: ({ event, delta: [, dy], pinching }) => {
@@ -95,15 +76,14 @@ export function GestureSurface() {
         const sy = event.clientY - rect.top
         // Each notch is ~100px. Negative dy = scroll up = zoom in.
         const factor = Math.pow(1.2, -dy / 100)
-        const v = useStore.getState().viewport
-        applyViewport(zoomAt(v, sx, sy, rect.width, rect.height, factor))
+        useStore.getState().zoomAtPixel(sx, sy, rect.width, rect.height, factor)
       },
     },
     {
       target: surfaceRef,
       eventOptions: { passive: false },
       drag: { filterTaps: true, pointer: { keys: false } },
-      pinch: { scaleBounds: { min: 0.001, max: 1e15 }, rubberband: false },
+      pinch: { scaleBounds: { min: 0.001, max: MAX_PINCH_SCALE }, rubberband: false },
     },
   )
 

@@ -2,7 +2,7 @@ import { Check, Copy, RotateCcw } from "lucide-react"
 import { useState } from "react"
 
 import { useStore } from "../state/store"
-import { pickZoom } from "../util/renderMath"
+import { pickTier, pickZoom } from "../util/renderMath"
 
 function fmt(n: number, digits = 6): string {
   if (!Number.isFinite(n)) return "—"
@@ -15,6 +15,7 @@ export function ViewPanel() {
   const [copied, setCopied] = useState(false)
 
   const zoomLevel = pickZoom(viewport.span)
+  const fast = pickTier(viewport.span) === "direct"
 
   const onCopy = async () => {
     try {
@@ -38,6 +39,17 @@ export function ViewPanel() {
         <dd className="text-zinc-300 tabular-nums">{fmt(viewport.span, 6)}</dd>
         <dt className="text-zinc-500">zoom</dt>
         <dd className="text-zinc-300 tabular-nums">{zoomLevel}</dd>
+        <dt className="text-zinc-500">algorithm</dt>
+        <dd className="text-zinc-300 flex items-center gap-1.5">
+          <span>{fast ? "direct" : "perturbation"}</span>
+          <span
+            className={`px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${
+              fast ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"
+            }`}
+          >
+            {fast ? "FAST" : "SLOW"}
+          </span>
+        </dd>
       </dl>
       <div className="flex gap-2 mt-3">
         <button

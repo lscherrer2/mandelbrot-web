@@ -1,15 +1,40 @@
 export const BASE_SPAN = 4.0
 export const MIN_ZOOM = -5
-export const MAX_ZOOM = 18
+// Deep-zoom ceiling. The Tier C perturbation renderer resolves down to ~1e-300;
+// 2^1000 ≈ 1e301 ⇒ span ≈ 4e-301, comfortably inside double's exponent range.
+export const MAX_ZOOM = 1000
 
 export type Viewport = { cx: number; cy: number; span: number }
 
-// Floor on viewport.span: anything smaller and the F32 shader stops resolving
-// adjacent pixels. Picked to match MAX_ZOOM so the two limits stay in sync.
+// Absolute floor on viewport.span, matched to MAX_ZOOM.
 export const MIN_SPAN = BASE_SPAN / Math.pow(2, MAX_ZOOM)
+
+// Span at/above which the plain float32 direct shader (Tier A) still resolves
+// pixels — its precision wall is ~1e-4. Below this we switch to Tier C
+// (perturbation). A hysteresis band (handled by the caller) avoids flicker.
+export const TIER_DIRECT_MIN_SPAN = 2e-4
+
+export type Tier = "direct" | "perturb"
+
+/** Which renderer to use for a given span (no hysteresis — caller adds that). */
+export function pickTier(span: number): Tier {
+  return span >= TIER_DIRECT_MIN_SPAN ? "direct" : "perturb"
+}
 
 export function clampSpan(span: number): number {
   return Math.max(MIN_SPAN, span)
+}
+
+/**
+ * Split a (possibly sub-float32) span into mantissa ∈ [1,2) and integer base-2
+ * exponent, so the Tier C shader can carry δc = pixelOffset·span past the
+ * float32 underflow threshold (~1e-38).
+ */
+export function spanMantExp(span: number): { mant: number; exp: number } {
+  if (!(span > 0)) return { mant: 1, exp: 0 }
+  const exp = Math.floor(Math.log2(span))
+  const mant = span / Math.pow(2, exp)
+  return { mant, exp }
 }
 
 /**
@@ -23,10 +48,11 @@ export function pickZoom(viewportSpan: number): number {
 }
 
 // Past this zoom level, escape iterations stop resolving detail unless we
-// scale them with depth.
+// scale them with depth. Deep (Tier C) zooms need far more — the ramp keeps
+// climbing and the cap is high (this also sets the reference-orbit length).
 const ITER_RAMP_ZOOM = 12
-const ITER_PER_ZOOM = 64
-const MAX_EFFECTIVE_ITER = 16384
+const ITER_PER_ZOOM = 96
+const MAX_EFFECTIVE_ITER = 100000
 // Flat headroom on the base count so low/medium zooms (0-5) resolve a bit more
 // detail. The depth ramp above stacks on top of this scaled base.
 const ITER_BASE_SCALE = 1.35

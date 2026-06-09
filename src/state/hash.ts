@@ -1,7 +1,11 @@
 /**
  * URL-hash persistence for viewport + palette + iterations.
  *
- * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>&sm=<0|1>&m=<hsv|iq>
+ * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>&sm=<0|1>&m=<hsv|iq>&ch=<reStr>,<imStr>
+ *
+ * `c` is the double-precision center (good to ~1e-15). `ch` carries the center
+ * as full-precision decimal strings, added only for deep views — doubles cannot
+ * hold the ~300 digits a 1e-300 coordinate needs. When present, `ch` wins.
  *
  * Defaults if absent: cx=-0.5, cy=0, span=3.5, it=512, p=0.6,0.8,1,0.3,0, sm=1, m=hsv
  */
@@ -24,6 +28,8 @@ export type PersistedState = {
   viewport: Viewport
   iterations: number
   palette: Palette
+  /** Full-precision center (decimal strings). Present only for deep views. */
+  centerStr?: { re: string; im: string }
 }
 
 export const MODE_DEFAULTS: Record<ColorMode, { hue: number; scale: number }> = {
@@ -78,6 +84,10 @@ export function parseHash(hash: string = window.location.hash): PersistedState {
   if (sm !== null) out.palette.smooth = sm !== "0"
   const m = params.get("m")
   if (m === "hsv" || m === "iq") out.palette.mode = m
+  const ch = params.get("ch")?.split(",")
+  if (ch && ch.length === 2 && ch[0] && ch[1]) {
+    out.centerStr = { re: ch[0], im: ch[1] }
+  }
   return out
 }
 
@@ -86,6 +96,9 @@ function fmt(n: number, digits = 6): string {
   // deep zooms (~1e-12 of complex plane).
   return Number(n.toPrecision(digits)).toString()
 }
+
+// Below this span, doubles can't pin the center — emit the full-precision `ch`.
+const DEEP_SPAN = 1e-10
 
 export function encodeHash(s: PersistedState): string {
   const parts = [
@@ -96,6 +109,9 @@ export function encodeHash(s: PersistedState): string {
     `sm=${s.palette.smooth ? 1 : 0}`,
     `m=${s.palette.mode}`,
   ]
+  if (s.centerStr && s.viewport.span < DEEP_SPAN) {
+    parts.push(`ch=${s.centerStr.re},${s.centerStr.im}`)
+  }
   return "#" + parts.join("&")
 }
 
