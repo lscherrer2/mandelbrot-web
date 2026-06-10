@@ -71,23 +71,62 @@ export function toNumber(v: Fixed, frac: number): number {
 }
 
 /**
- * Fast conversion to `double` for the orbit hot loop. The fast path extracts
- * the top chunk above 2^-40 — cheap, and plenty for O(1) orbit points. Values
- * below ~2^-10 would keep <30 significant bits that way, so they fall back to
- * the exact conversion. That matters: near-axis deep zooms have reference
- * orbits passing within ~1e-14 of 0, and those close returns must retain full
- * float32 *relative* precision or the GPU's rebasing reads a corrupted
- * reference and renders displaced "glitch" seams.
+ * Exponent sentinel marking an exact-zero orbit point in the reference
+ * texture. Any exponent this far down means "contributes nothing at any
+ * scale" — the shader's exp2 scale factors flush it to zero.
  */
-export function toFloat32(v: Fixed, frac: number): number {
-  if (v === 0n) return 0
-  const neg = v < 0n
-  const a = neg ? -v : v
-  const drop = frac - 40
-  const scaled = drop > 0 ? Number(a >> BigInt(drop)) : Number(a << BigInt(-drop))
-  if (scaled < 0x40000000 /* 2^30 ⇒ |value| < 2^-10 */) return toNumber(v, frac)
-  const val = scaled * Math.pow(2, -40)
-  return neg ? -val : val
+export const E_ZERO = -1e9
+
+/** Number of bits in `a` (a > 0n), without string round-trips. */
+function bitLen(a: bigint): number {
+  let bits = 0
+  for (let c = 512; c >= 1; c >>= 1) {
+    const s = BigInt(c)
+    while (a >> s) {
+      a >>= s
+      bits += c
+    }
+  }
+  return bits + 1
+}
+
+/**
+ * Pack an orbit point Z = (X,Y)/2^frac as a float32-safe mantissa pair plus a
+ * shared power-of-2 exponent — (mx, my, e) with Z = (mx,my)·2^e and
+ * max(|mx|,|my|) ∈ [0.5,1) — written to out[idx..idx+2]. Deep reference
+ * orbits legitimately pass within ~1e-150 of the origin (close returns near a
+ * depth-1e-300 minibrot), far below plain float32's ~1e-38 flush threshold;
+ * carrying the exponent separately keeps those texels exact at any depth. The
+ * extraction is pure BigInt + small-int math, so it cannot itself underflow.
+ */
+export function writeMantExp(out: Float32Array, idx: number, X: Fixed, Y: Fixed, frac: number): void {
+  const ax = X < 0n ? -X : X
+  const ay = Y < 0n ? -Y : Y
+  const bx = ax === 0n ? 0 : bitLen(ax)
+  const by = ay === 0n ? 0 : bitLen(ay)
+  const bits = Math.max(bx, by)
+  if (bits === 0) {
+    out[idx] = 0
+    out[idx + 1] = 0
+    out[idx + 2] = E_ZERO
+    return
+  }
+  out[idx] = compMant(X, ax, bx, bits)
+  out[idx + 1] = compMant(Y, ay, by, bits)
+  out[idx + 2] = bits - frac
+}
+
+/**
+ * One component's mantissa relative to the shared scale 2^bits, keeping the
+ * top 46 significant bits (exact in a double, beyond float32's 24). A
+ * component ≥ 2^126 smaller than its partner quantizes to ~0 in the texture —
+ * negligible by a wider margin than float32 rounding itself.
+ */
+function compMant(v: Fixed, a: bigint, ab: number, bits: number): number {
+  if (ab === 0) return 0
+  const keep = Math.min(ab, 46)
+  const m = Number(a >> BigInt(ab - keep)) * Math.pow(2, ab - keep - bits)
+  return v < 0n ? -m : m
 }
 
 const ROUND = (frac: number) => 1n << BigInt(frac - 1)

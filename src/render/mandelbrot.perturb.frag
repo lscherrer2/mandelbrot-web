@@ -1,24 +1,29 @@
 #version 300 es
 precision highp float;
 
-// Tier C — deep-zoom Mandelbrot via perturbation theory.
+// Tier C — deep-zoom Mandelbrot via perturbation theory, in extended-range
+// ("floatexp") arithmetic end to end.
 //
 // A single high-precision reference orbit Z_n (anchored at the view center) is
-// computed on the CPU and uploaded as an RG32F texture. Each pixel tracks only
-// its small deviation δ_n = z_n − Z_n with the recurrence
+// computed on the CPU and uploaded as an RGBA32F texture, each texel packing
+// Z_n = mant·2^exp. Each pixel tracks only its small deviation δ_n = z_n − Z_n
+// with the recurrence
 //     δ_{n+1} = 2·Z_n·δ_n + δ_n² + δc        (δc = c − C = pixelOffset · span)
-// which keeps the working numbers in hardware-float range — solving the
-// *precision* wall. To also survive the *exponent* wall (δ ≈ 1e-300 underflows
-// float32, δ² ≈ 1e-600 underflows even float64), δ is stored as a mantissa/exp
-// pair  δ = d · 2^exp  with |d| renormalized to O(1) and `exp` a per-pixel
-// float. Zhuoran rebasing keeps a single reference glitch-free.
+// — solving the *precision* wall. To also survive the *exponent* wall, every
+// magnitude-carrying quantity is a mantissa/exponent pair: δ = d·2^ex, the
+// reference Z (whose close returns near a depth-1e-300 minibrot are ~1e-150,
+// far below float32's ~1e-38 flush threshold), and the reassembled full orbit
+// z = Z + δ = zm·2^zE. The escape test and Zhuoran rebasing comparison are
+// done on those pairs, so they stay exact at any depth — plain-float
+// reconstruction is used only where the value is provably in float32 range
+// (escape happens at |z| ≈ 256).
 
 uniform vec2  uResolution;
 uniform float uSpanMant;     // span = uSpanMant · 2^uSpanExp, uSpanMant ∈ [1,2)
 uniform float uSpanExp;
 uniform vec2  uPixelBias;    // (viewCenter − anchor)/span, lets small pans skip orbit recompute
 uniform int   uMaxIter;      // true iteration cap
-uniform sampler2D uRefOrbit; // RG32F, texel n = Z_n (Re,Im)
+uniform sampler2D uRefOrbit; // RGBA32F, texel n = (mantRe, mantIm, exp, 0) of Z_n
 uniform int   uRefW;         // reference texture width
 uniform int   uMaxRefIter;   // last valid reference index (rebase wraps at this)
 
@@ -29,13 +34,23 @@ out vec4 fragColor;
 //#include palette.glsl
 
 const float R2 = 65536.0; // bailout² (R = 256, large → smooth coloring)
+// Exponent of an exact-zero orbit point (worker writes this sentinel); any
+// exponent this small flushes the term to zero at every scale it meets.
+const float E_ZERO = -1.0e9;
 
 vec2 cmul(vec2 a, vec2 b) {
     return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
-vec2 fetchZ(int m) {
-    return texelFetch(uRefOrbit, ivec2(m % uRefW, m / uRefW), 0).rg;
+vec3 fetchZ(int m) {
+    return texelFetch(uRefOrbit, ivec2(m % uRefW, m / uRefW), 0).rgb;
+}
+
+// 2^e for the (always ≤ 0) exponent-alignment factors. Clamped so the sentinel
+// exponent can't feed exp2 a huge argument (driver-safe; anything below −200
+// underflows float32 to the intended 0 anyway).
+float pexp2(float e) {
+    return exp2(max(e, -200.0));
 }
 
 // Renormalize a mantissa/exponent pair so |d| (L∞) lands in [1,2).
@@ -56,8 +71,8 @@ void main() {
     vec2  dcMant = (p + uPixelBias) * uSpanMant;
     float se     = uSpanExp;
 
-    // δ = d · 2^exp.  Start at δ₀ = 0, exponent seeded to the span scale so the
-    // first δc add is not flushed to zero.
+    // δ = d · 2^ex.  Start at δ₀ = 0, exponent seeded to the span scale so the
+    // first δc add lands at the right magnitude.
     vec2  d   = vec2(0.0);
     float ex  = se;
     int   m   = 0;
@@ -68,48 +83,65 @@ void main() {
     float derExp = 0.0;
 
     for (int iter = 0; iter < uMaxIter; iter++) {
-        vec2 Z = fetchZ(m);
+        vec3  Zt = fetchZ(m);
+        vec2  Zm = Zt.xy;
+        float Ze = Zt.z;
 
-        // Reconstruct true orbit z = Z_m + δ. `scaled` = δ as a plain float
-        // (valid while ex > −126; underflows to 0 only at extreme depth → z ≈ Z).
-        vec2 scaled = d * exp2(ex);
-        vec2 z = Z + scaled;
-        zz = dot(z, z);
-        if (zz > R2) { esc = iter; zEsc = z; break; }
+        // Reconstruct the true orbit z = Z + δ, aligned at the larger
+        // exponent. A side more than ~2^126 below the other flushes out of the
+        // sum — correctly negligible. Renorm puts max|zm| in [1,2).
+        float zE = max(Ze, ex);
+        vec2  zm = Zm * pexp2(Ze - zE) + d * pexp2(ex - zE);
+        renorm(zm, zE);
+
+        // Escape test on a plain-float reconstruction: |z| stays ≤ ~2^18 (one
+        // step past the bailout), so float32 covers every possible escape;
+        // below 2^-120 the orbit is simply tiny and cannot escape.
+        vec2 zf = zE > -120.0 ? zm * exp2(zE) : vec2(0.0);
+        zz = dot(zf, zf);
+        if (zz > R2) { esc = iter; zEsc = zf; break; }
 
         // Relief shading needs der = dz/dc via der' = 2·z·der + 1, using the
         // reconstructed z (rebasing doesn't touch it). The true |der| at depth
-        // is ~1/span — far beyond float32 — so the magnitude is carried as
-        // mantissa·2^derExp; reliefT cancels derExp against log2(pixel size).
-        // (The +1 is below float eps long before the rescale threshold.)
+        // is ~1/span — far beyond float32 — so it is carried as mantissa·2^derExp
+        // and the step is combined in exponent form: the 2·z·der term lives at
+        // zE+derExp+1, the +1 term at exponent 0. reliefT cancels derExp
+        // against log2(pixel size).
         if (uRelief > 0.0) {
-            der = 2.0 * cmul(z, der) + vec2(1.0, 0.0);
-            if (max(abs(der.x), abs(der.y)) > 1.1e12) { // 2^40
-                der *= exp2(-40.0);
-                derExp += 40.0;
-            }
+            float eA = zE + derExp + 1.0;
+            float eN = max(eA, 0.0);
+            der = cmul(zm, der) * pexp2(eA - eN) + vec2(pexp2(-eN), 0.0);
+            derExp = eN;
+            renorm(der, derExp);
         }
 
         // Rebase (Zhuoran): when the running orbit |z| drops below |δ| (glitch
         // onset) or the reference is exhausted, fold z back into δ and restart
-        // the reference. Compare in L∞ (max-abs) — NOT |z|²/|δ|², whose squares
-        // underflow float32 at depth and silently disable the glitch correction.
-        float zmag = max(abs(z.x), abs(z.y));
-        float dmag = max(abs(scaled.x), abs(scaled.y));
-        if (zmag < dmag || m >= uMaxRefIter) {
-            d = z; ex = 0.0; renorm(d, ex);
+        // the reference. Both sides are renormalized mantissa·2^exp, so the
+        // exponent-then-mantissa comparison is exact at any depth — this is
+        // what plain-float comparison silently got wrong below ~1e-38.
+        float zMagM = max(abs(zm.x), abs(zm.y));
+        float dMagM = max(abs(d.x), abs(d.y));
+        bool zSmaller = zMagM == 0.0
+            ? dMagM > 0.0
+            : (zE < ex || (zE == ex && zMagM < dMagM));
+        if (zSmaller || m >= uMaxRefIter) {
+            d = zm; ex = zE;
             m = 0;
-            Z = vec2(0.0); // Z₀ = 0
+            Zm = vec2(0.0); Ze = E_ZERO; // Z₀ = 0
         }
 
-        // Step δ' = 2·Z·δ + δ² + δc, combined at exponent Ep = max(ex, se) so
-        // every scale factor is ≤ 1 (terms that underflow are correctly dropped).
-        vec2  a  = 2.0 * cmul(Z, d);  // exponent ex
-        vec2  b  = cmul(d, d);        // exponent 2·ex
-        float Ep = max(ex, se);
-        d = a      * exp2(ex - Ep)
-          + b      * exp2(2.0 * ex - Ep)
-          + dcMant * exp2(se - Ep);
+        // Step δ' = 2·Z·δ + δ² + δc with each term as mantissa·2^exp, combined
+        // at the largest exponent Ep so every scale factor is ≤ 1 (terms that
+        // underflow sit ≥ 2^126 below the leading one — correctly dropped).
+        vec2  a  = cmul(Zm, d);       // ·2^eA, the 2· folded into the exponent
+        float eA = Ze + ex + 1.0;
+        vec2  b  = cmul(d, d);        // ·2^eB
+        float eB = ex + ex;
+        float Ep = max(max(eA, eB), se);
+        d = a      * pexp2(eA - Ep)
+          + b      * pexp2(eB - Ep)
+          + dcMant * pexp2(se - Ep);
         ex = Ep;
         renorm(d, ex);
         m++;

@@ -220,6 +220,7 @@ export const useStore = create<AppState>()(
     },
 
     resetView: () => {
+      console.trace("[deep] resetView called") // TEMP diagnostics
       const centerHP = {
         x: fromNumber(DEFAULTS.viewport.cx, FRAC_HP),
         y: fromNumber(DEFAULTS.viewport.cy, FRAC_HP),

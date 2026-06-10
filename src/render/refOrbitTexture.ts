@@ -1,7 +1,9 @@
 /**
- * Wraps the high-precision reference orbit (interleaved Re,Im float32 pairs,
- * texel n = Z_n) into an RG32F 2-D texture that the Tier C shader reads via
- * `texelFetch(uRefOrbit, ivec2(m % width, m / width), 0)`.
+ * Wraps the high-precision reference orbit ((mantRe, mantIm, exp, 0) float32
+ * quads, texel n = Z_n = mant·2^exp) into an RGBA32F 2-D texture that the
+ * Tier C shader reads via `texelFetch(uRefOrbit, ivec2(m % width, m / width), 0)`.
+ * The explicit exponent channel keeps deep orbits' near-zero close returns
+ * (far below float32's ~1e-38 flush threshold) exact at any depth.
  *
  * The 1-D iteration array is wrapped row-major because a single texture row is
  * capped at MAX_TEXTURE_SIZE. Width 4096 is supported by ~all WebGL2 devices;
@@ -48,8 +50,8 @@ export class RefOrbitTexture {
     this.height = height
     this.maxRefIter = Math.min(maxRefIter, width * height - 1)
 
-    // Pad to a full width×height grid (RG = 2 floats per texel).
-    const needed = width * height * 2
+    // Pad to a full width×height grid (RGBA = 4 floats per texel).
+    const needed = width * height * 4
     const data = orbit.length >= needed ? orbit : new Float32Array(needed)
     if (data !== orbit) data.set(orbit.subarray(0, Math.min(orbit.length, needed)))
 
@@ -58,7 +60,7 @@ export class RefOrbitTexture {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, width, height, 0, gl.RG, gl.FLOAT, data)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, data)
   }
 
   bind(unit: number): void {

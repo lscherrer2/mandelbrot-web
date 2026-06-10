@@ -56,7 +56,10 @@ const ITER_PER_ZOOM = 160
 // zoom depth — minibrots near the boundary escape slowly, so a linear ramp
 // reads as solid black at depth. The quadratic term keeps headroom climbing.
 const ITER_QUAD_PER_ZOOM = 0.75
-const MAX_EFFECTIVE_ITER = 100000
+// The quadratic ramp reaches ~890k at MAX_ZOOM; a 100k cap would saturate at
+// span ~1e-86 and starve everything deeper. Renders stay responsive because
+// the deep tier is budgeted/progressive, not because iterations are few.
+const MAX_EFFECTIVE_ITER = 1000000
 // Flat headroom on the base count so low/medium zooms (0-5) resolve a bit more
 // detail. The depth ramp above stacks on top of this scaled base.
 const ITER_BASE_SCALE = 1.35

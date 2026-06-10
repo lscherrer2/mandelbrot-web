@@ -33,10 +33,9 @@ float mandelbrot(vec2 c, int maxIter, out vec2 zOut, out vec2 derOut,
     for (int i = 0; i < maxIter; i++) {
         if (uRelief > 0.0) {
             // der' = 2·z·der + 1, with the magnitude carried as mantissa·2^exp
-            // (the +1 is below float eps long before the rescale threshold,
-            // so dropping it from the rescaled mantissa is exact anyway).
+            // (once rescaled, the +1 term must be expressed in mantissa units).
             der = 2.0 * vec2(z.x*der.x - z.y*der.y, z.x*der.y + z.y*der.x)
-                + vec2(1.0, 0.0);
+                + vec2(exp2(-derExp), 0.0);
             if (max(abs(der.x), abs(der.y)) > 1.1e12) { // 2^40
                 der *= exp2(-40.0);
                 derExp += 40.0;

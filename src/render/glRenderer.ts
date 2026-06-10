@@ -82,7 +82,10 @@ export class GLRenderer {
   private jobFence: WebGLSync | null = null
 
   constructor(canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: false })
+    // preserveDrawingBuffer: the deep tier presents only on frames where a
+    // strip job completes (the direct tier redraws every frame), so the canvas
+    // must retain its buffer or captures/composites between presents go black.
+    const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true })
     if (!gl) throw new Error("WebGL2 not supported")
     this.gl = gl
     // RG32F is sampleable in core WebGL2; request this anyway for broad support.

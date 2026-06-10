@@ -76,7 +76,7 @@ vec3 gradOcean(float t) {
 // pixel size in complex units; only log2 totals are ever combined.
 
 const vec3  RELIEF_L3   = normalize(vec3(-0.60, 0.60, 0.55)); // upper-left light
-const float RELIEF_GAIN = 80.0; // vertical exaggeration at slider = 1
+const float RELIEF_GAIN = 12.0; // vertical exaggeration at slider = 1
 
 // Lambert term t ∈ [0,1]; flat ground gives t = RELIEF_L3.z.
 float reliefT(vec2 z, vec2 der, float derExp, float log2Px) {
@@ -92,15 +92,21 @@ float reliefT(vec2 z, vec2 der, float derExp, float log2Px) {
     // |∇h| per *pixel*, in log2: the huge derExp cancels against log2Px.
     float logg = log2(dm) + derExp + log2Px
                - 0.5 * log2(zz) - log2(lnz * 0.6931472);
-    float g = exp2(clamp(logg, -30.0, 30.0)) * RELIEF_GAIN * uRelief;
+    float strength = uRelief * uRelief; // finer control at small slider values
+    float g = exp2(clamp(logg, -30.0, 30.0)) * RELIEF_GAIN * strength;
     vec3 n = normalize(vec3((u / ul) * g, 1.0)); // heightfield surface normal
     return max(dot(n, RELIEF_L3), 0.0);
 }
 
 // t→color: plateaus (t = L3.z) keep the palette color untouched; lit slopes
-// brighten toward 1/L3.z, shadowed ones fall to black, plus a tight sheen.
+// brighten and shadowed ones darken without crushing the palette to black.
 vec3 applyRelief(vec3 col, float t) {
-    return col * (t / RELIEF_L3.z) + vec3(0.25 * pow(t, 16.0));
+    float flatLight = RELIEF_L3.z;
+    float lit = max(t - flatLight, 0.0) / (1.0 - flatLight);
+    float shadow = max(flatLight - t, 0.0) / flatLight;
+    float factor = 1.0 + 0.65 * lit - 0.50 * shadow;
+    float sheen = 0.10 * pow(smoothstep(flatLight, 1.0, t), 8.0);
+    return col * factor + vec3(sheen);
 }
 
 vec3 shade(float l) {

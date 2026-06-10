@@ -101,6 +101,7 @@ export function CanvasLayer() {
     worker.onmessage = (e: MessageEvent<OrbitResult>) => {
       inFlight = false
       const res = e.data
+      console.log(`[deep] orbit reply req=${res.reqId} maxRefIter=${res.maxRefIter} escaped=${res.refEscaped} frac=${res.fracBits}`)
       if (!lastReq || res.reqId !== lastReq.reqId) return // superseded
       renderer.setOrbit(res.orbit, res.maxRefIter)
       loadedAnchor = { x: lastReq.x, y: lastReq.y }
@@ -229,6 +230,7 @@ export function CanvasLayer() {
           }
           lastReq = { reqId, x: st.centerHP.x, y: st.centerHP.y, span, band }
           inFlight = true
+          console.log(`[deep] orbit request req=${reqId} span=${span.toExponential(3)} iters=${iters} band=${band}`)
           worker.postMessage(req)
         }
 
@@ -244,6 +246,7 @@ export function CanvasLayer() {
         if (job && renderer.jobReady()) {
           if (job.nextRow >= job.bh) {
             renderer.finishPerturbJob()
+            console.log(`[deep] job done ${job.bw}x${job.bh} sharp=${job.sharp} step=${job.scaleStep}`)
             front = { x: job.x, y: job.y, span: job.span }
             frontDirty = true
             if (job.sharp) {
