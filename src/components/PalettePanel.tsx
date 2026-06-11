@@ -206,8 +206,18 @@ export function PalettePanel() {
         step={0.01}
         onChange={(n) => setPalette({ hue: n })}
       />
+      <LogSlider
+        label="Scale"
+        value={palette.scale}
+        min={0.001}
+        max={2}
+        onChange={(n) => setPalette({ scale: n })}
+      />
+      {/* Texture stages — each maps to one slider-gated pass of the colorize()
+          pipeline in palette.glsl, composing with every scheme above. */}
+      <h2 className="text-xs uppercase tracking-wider text-zinc-400 pt-1">Texture</h2>
       {/* Slope shading: lights the iteration "heightfield" via dz/dc, faking
-          embossed 3D spikes. Composes with every scheme above. */}
+          embossed 3D spikes. */}
       <Slider
         label="Relief (3D)"
         value={palette.relief}
@@ -216,12 +226,43 @@ export function PalettePanel() {
         step={0.01}
         onChange={(n) => setPalette({ relief: n })}
       />
-      <LogSlider
-        label="Scale"
-        value={palette.scale}
-        min={0.001}
-        max={2}
-        onChange={(n) => setPalette({ scale: n })}
+      {/* Stripe-average coloring: flowing striations across iteration bands. */}
+      <Slider
+        label="Stripes"
+        value={palette.stripes}
+        min={0}
+        max={1}
+        step={0.01}
+        onChange={(n) => setPalette({ stripes: n })}
+      />
+      {palette.stripes > 0 && (
+        <Slider
+          label="Stripe density"
+          value={palette.stripeFreq}
+          min={1}
+          max={12}
+          step={1}
+          fmt={(n) => n.toFixed(0)}
+          onChange={(n) => setPalette({ stripeFreq: n })}
+        />
+      )}
+      {/* Distance-estimate ink: filaments dip to black with a bright rim. */}
+      <Slider
+        label="Edge ink"
+        value={palette.edges}
+        min={0}
+        max={1}
+        step={0.01}
+        onChange={(n) => setPalette({ edges: n })}
+      />
+      {/* Sawtooth shading: brightness decays per ramp cycle, snaps back. */}
+      <Slider
+        label="Bands"
+        value={palette.bands}
+        min={0}
+        max={1}
+        step={0.01}
+        onChange={(n) => setPalette({ bands: n })}
       />
     </section>
   )

@@ -55,8 +55,10 @@ export type AppState = {
   panByPixels: (dpx: number, dpy: number, vw: number) => void
   /** Zoom by `factor` (>1 = in) keeping screen point (sx,sy) fixed. */
   zoomAtPixel: (sx: number, sy: number, vw: number, vh: number, factor: number) => void
-  /** Navigate to an arbitrary-precision decimal coordinate, keeping current span. */
-  navigateTo: (re: string, im: string) => void
+  /** Navigate to an arbitrary-precision decimal coordinate, optionally setting a new span. */
+  navigateTo: (re: string, im: string, span?: number) => void
+  /** Set the viewport span (zoom level) without changing the center. */
+  setSpan: (span: number) => void
 
   iterations: number
   setIterations: (n: number) => void
@@ -146,14 +148,18 @@ export const useStore = create<AppState>()(
         return { centerHP, viewport: deriveViewport(centerHP, newSpan) }
       }),
 
-    navigateTo: (re, im) =>
+    navigateTo: (re, im, span) =>
       set((s) => {
         const centerHP = {
           x: fromDecimalString(re, FRAC_HP),
           y: fromDecimalString(im, FRAC_HP),
         }
-        return { centerHP, viewport: deriveViewport(centerHP, s.viewport.span) }
+        const newSpan = span !== undefined ? clampSpan(span) : s.viewport.span
+        return { centerHP, viewport: deriveViewport(centerHP, newSpan) }
       }),
+
+    setSpan: (span) =>
+      set((s) => ({ viewport: deriveViewport(s.centerHP, clampSpan(span)) })),
 
     iterations: initialHash.iterations,
     setIterations: (n) => set({ iterations: Math.max(16, Math.min(4096, Math.round(n))) }),

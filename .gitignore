@@ -24,3 +24,12 @@ dist-ssr
 *.sw?
 CLAUDE.md
 .claude/
+.agents
+.playwright-mcp
+.playwright-mcp
+.playwright-mcp
+.playwright-mcp
+.playwright-mcp
+.playwright-mcp
+AGENTS.md
+*.jpeg

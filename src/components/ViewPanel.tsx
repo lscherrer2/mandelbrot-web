@@ -2,7 +2,7 @@ import { Check, Copy, Lock, LockOpen, RotateCcw } from "lucide-react"
 import { useState } from "react"
 
 import { useStore } from "../state/store"
-import { pickTier, pickZoom } from "../util/renderMath"
+import { BASE_SPAN, clampSpan, pickTier, pickZoom } from "../util/renderMath"
 
 function fmt(n: number, digits = 6): string {
   if (!Number.isFinite(n)) return "—"
@@ -11,19 +11,64 @@ function fmt(n: number, digits = 6): string {
 
 function GoToForm() {
   const navigateTo = useStore((s) => s.navigateTo)
+  const setSpan = useStore((s) => s.setSpan)
+  const viewport = useStore((s) => s.viewport)
   const [re, setRe] = useState("")
   const [im, setIm] = useState("")
+  const [spanStr, setSpanStr] = useState("")
+  const [zoomStr, setZoomStr] = useState("")
   const [open, setOpen] = useState(false)
 
-  const canSubmit = re.trim() !== "" && im.trim() !== ""
+  function handleZoomChange(v: string) {
+    setZoomStr(v)
+    const z = parseInt(v, 10)
+    if (Number.isFinite(z)) {
+      setSpanStr((BASE_SPAN / Math.pow(2, z)).toExponential(3))
+    } else {
+      setSpanStr("")
+    }
+  }
+
+  function handleSpanChange(v: string) {
+    setSpanStr(v)
+    const n = parseFloat(v)
+    if (Number.isFinite(n) && n > 0) {
+      setZoomStr(String(pickZoom(n)))
+    } else {
+      setZoomStr("")
+    }
+  }
+
+  const parsedSpan: number | null = (() => {
+    if (zoomStr.trim() !== "") {
+      const z = parseInt(zoomStr, 10)
+      if (Number.isFinite(z)) return clampSpan(BASE_SPAN / Math.pow(2, z))
+    }
+    if (spanStr.trim() !== "") {
+      const s = parseFloat(spanStr)
+      if (Number.isFinite(s) && s > 0) return clampSpan(s)
+    }
+    return null
+  })()
+
+  const hasCoords = re.trim() !== "" && im.trim() !== ""
+  const hasSpan = parsedSpan !== null
+  const canSubmit = hasCoords || hasSpan
+
+  function reset() {
+    setRe(""); setIm(""); setSpanStr(""); setZoomStr("")
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!canSubmit) return
-    navigateTo(re.trim(), im.trim())
+    if (hasCoords) {
+      navigateTo(re.trim(), im.trim(), parsedSpan ?? undefined)
+    } else if (hasSpan) {
+      setSpan(parsedSpan!)
+    }
     setOpen(false)
-    setRe("")
-    setIm("")
+    reset()
   }
 
   if (!open) {
@@ -62,6 +107,30 @@ function GoToForm() {
           className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
         />
       </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-xs text-zinc-500 mb-0.5">Zoom</label>
+          <input
+            type="text"
+            value={zoomStr}
+            onChange={(e) => handleZoomChange(e.target.value)}
+            placeholder={String(pickZoom(viewport.span))}
+            spellCheck={false}
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-zinc-500 mb-0.5">Span</label>
+          <input
+            type="text"
+            value={spanStr}
+            onChange={(e) => handleSpanChange(e.target.value)}
+            placeholder={fmt(viewport.span, 4)}
+            spellCheck={false}
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+          />
+        </div>
+      </div>
       <div className="flex gap-2">
         <button
           type="submit"
@@ -72,7 +141,7 @@ function GoToForm() {
         </button>
         <button
           type="button"
-          onClick={() => { setOpen(false); setRe(""); setIm("") }}
+          onClick={() => { setOpen(false); reset() }}
           className="text-xs px-2.5 py-1.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 transition-colors"
         >
           Cancel

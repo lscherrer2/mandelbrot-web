@@ -27,6 +27,10 @@ type DirectUniforms = {
   uScale: WebGLUniformLocation
   uOffset: WebGLUniformLocation
   uRelief: WebGLUniformLocation
+  uStripe: WebGLUniformLocation
+  uStripeFreq: WebGLUniformLocation
+  uEdge: WebGLUniformLocation
+  uBands: WebGLUniformLocation
   uSmooth: WebGLUniformLocation
   uMode: WebGLUniformLocation
 }
@@ -46,6 +50,10 @@ type PerturbUniforms = {
   uScale: WebGLUniformLocation
   uOffset: WebGLUniformLocation
   uRelief: WebGLUniformLocation
+  uStripe: WebGLUniformLocation
+  uStripeFreq: WebGLUniformLocation
+  uEdge: WebGLUniformLocation
+  uBands: WebGLUniformLocation
   uSmooth: WebGLUniformLocation
   uMode: WebGLUniformLocation
 }
@@ -99,12 +107,14 @@ export class GLRenderer {
 
     this.directUniforms = mapUniforms(gl, this.directProgram, [
       "uResolution", "uCenter", "uSpanX", "uMaxIter",
-      "uHue", "uSat", "uVal", "uScale", "uOffset", "uRelief", "uSmooth", "uMode",
+      "uHue", "uSat", "uVal", "uScale", "uOffset", "uRelief",
+      "uStripe", "uStripeFreq", "uEdge", "uBands", "uSmooth", "uMode",
     ]) as unknown as DirectUniforms
     this.perturbUniforms = mapUniforms(gl, this.perturbProgram, [
       "uResolution", "uSpanMant", "uSpanExp", "uPixelBias", "uMaxIter",
       "uRefOrbit", "uRefW", "uMaxRefIter",
-      "uHue", "uSat", "uVal", "uScale", "uOffset", "uRelief", "uSmooth", "uMode",
+      "uHue", "uSat", "uVal", "uScale", "uOffset", "uRelief",
+      "uStripe", "uStripeFreq", "uEdge", "uBands", "uSmooth", "uMode",
     ]) as unknown as PerturbUniforms
     this.blitUniforms = mapUniforms(gl, this.blitProgram, [
       "uResolution", "uTex", "uTexSize", "uScaleRatio", "uOffset",
@@ -243,6 +253,10 @@ export class GLRenderer {
     gl.uniform1f(u.uScale, p.palette.scale)
     gl.uniform1f(u.uOffset, p.palette.offset)
     gl.uniform1f(u.uRelief, p.palette.relief)
+    gl.uniform1f(u.uStripe, p.palette.stripes)
+    gl.uniform1f(u.uStripeFreq, p.palette.stripeFreq)
+    gl.uniform1f(u.uEdge, p.palette.edges)
+    gl.uniform1f(u.uBands, p.palette.bands)
     gl.uniform1i(u.uSmooth, p.palette.smooth ? 1 : 0)
     gl.uniform1i(u.uMode, MODE_INDEX[p.palette.mode])
   }

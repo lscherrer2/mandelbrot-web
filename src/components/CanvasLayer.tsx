@@ -158,6 +158,8 @@ export function CanvasLayer() {
         // (sharpening only after the slider settles) instead of blocking on
         // full-quality frames.
         const paramsSig = `${pal.hue},${pal.sat},${pal.val},${pal.scale},${pal.offset},${
+          pal.relief
+        },${pal.stripes},${pal.stripeFreq},${pal.edges},${pal.bands},${
           pal.smooth ? 1 : 0
         },${pal.mode},${st.iterations}`
         if (paramsSig !== lastParamsSig) {

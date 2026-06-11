@@ -1,7 +1,7 @@
 /**
  * URL-hash persistence for viewport + palette + iterations.
  *
- * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>&rl=<relief>&sm=<0|1>&as=<0|1>&m=<mode>&lk=<0|1>&ch=<reStr>,<imStr>
+ * Schema:  #c=<cx>,<cy>&s=<span>&it=<iter>&p=<hue>,<sat>,<val>,<scale>,<offset>&rl=<relief>&tx=<stripes>,<stripeFreq>,<edges>,<bands>&sm=<0|1>&as=<0|1>&m=<mode>&lk=<0|1>&ch=<reStr>,<imStr>
  *          (mode ∈ COLOR_MODES, e.g. hsv, iq, classic, …)
  *
  * `c` is the double-precision center (good to ~1e-15). `ch` carries the center
@@ -45,6 +45,14 @@ export type Palette = {
   offset: number
   /** Slope-shading ("3D relief") strength, 0 = off … 1 = full. */
   relief: number
+  /** Stripe-average texture strength, 0 = off … 1 = full. */
+  stripes: number
+  /** Stripe angular density s in sin(s·arg z); even = parallel, odd = arcs. */
+  stripeFreq: number
+  /** Distance-estimate edge ink + rim glow strength, 0 = off … 1 = full. */
+  edges: number
+  /** Sawtooth "eclipse" banding strength, 0 = off … 1 = full. */
+  bands: number
   smooth: boolean
   mode: ColorMode
 }
@@ -86,6 +94,10 @@ export const DEFAULTS: PersistedState = {
     scale: MODE_DEFAULTS.iq.scale,
     offset: 0.0,
     relief: 0.0,
+    stripes: 0.0,
+    stripeFreq: 6.0,
+    edges: 0.0,
+    bands: 0.0,
     smooth: true,
     mode: "iq",
   },
@@ -122,6 +134,13 @@ export function parseHash(hash: string = window.location.hash): PersistedState {
     out.palette.offset = num(p[4], out.palette.offset)
   }
   out.palette.relief = num(params.get("rl") ?? undefined, out.palette.relief)
+  const tx = params.get("tx")?.split(",")
+  if (tx && tx.length === 4) {
+    out.palette.stripes = num(tx[0], out.palette.stripes)
+    out.palette.stripeFreq = num(tx[1], out.palette.stripeFreq)
+    out.palette.edges = num(tx[2], out.palette.edges)
+    out.palette.bands = num(tx[3], out.palette.bands)
+  }
   const sm = params.get("sm")
   if (sm !== null) out.palette.smooth = sm !== "0"
   const lk = params.get("lk")
@@ -151,6 +170,7 @@ export function encodeHash(s: PersistedState): string {
     `it=${s.iterations}`,
     `p=${fmt(s.palette.hue)},${fmt(s.palette.sat)},${fmt(s.palette.val)},${fmt(s.palette.scale)},${fmt(s.palette.offset)}`,
     `rl=${fmt(s.palette.relief, 3)}`,
+    `tx=${fmt(s.palette.stripes, 3)},${fmt(s.palette.stripeFreq, 3)},${fmt(s.palette.edges, 3)},${fmt(s.palette.bands, 3)}`,
     `sm=${s.palette.smooth ? 1 : 0}`,
     `m=${s.palette.mode}`,
     `lk=${s.panLocked ? 1 : 0}`,

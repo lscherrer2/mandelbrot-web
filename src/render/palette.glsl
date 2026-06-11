@@ -1,7 +1,15 @@
-// Shared coloring for the fractal shaders: shade(l) maps a (smooth) escape
-// count to a color. Interior points (l < 0) are handled by the callers.
-// glRenderer splices this file into each fragment shader in place of the
-// `//#include palette.glsl` marker, so both tiers color identically.
+// Shared coloring for the fractal shaders, structured as a pipeline:
+//   colorize(l, stripe, z, der, derExp, log2Px)
+//     = shade(l)            base palette (uMode picks the ramp)
+//     → applyBands          sawtooth "eclipse" brightness shaping
+//     → applyStripes        stripe-average orbit texture
+//     → applyRelief         Blinn-Phong slope lighting from dz/dc
+//     → applyEdge           distance-estimate ink + rim at the boundary
+// Each stage is gated on its own uniform (0 = skipped entirely), so effects
+// compose freely with every palette mode. Interior points (l < 0) are handled
+// by the callers. glRenderer splices this file into each fragment shader in
+// place of the `//#include palette.glsl` marker, so both tiers color
+// identically.
 //
 // Mode indices must match COLOR_MODES in src/state/hash.ts.
 
@@ -10,8 +18,15 @@ uniform float uSat;
 uniform float uVal;
 uniform float uScale;
 uniform float uOffset;
-uniform float uRelief; // 0 = off, 1 = full "3D" slope shading
+uniform float uRelief;     // 0 = off, 1 = full "3D" slope shading
+uniform float uStripe;     // stripe-average texture amount, 0 = off
+uniform float uStripeFreq; // stripe angular density s in sin(s·arg z)
+uniform float uEdge;       // boundary ink + rim glow amount, 0 = off
+uniform float uBands;      // sawtooth "eclipse" banding amount, 0 = off
 uniform int   uMode;
+
+// dz/dc is only worth iterating when an effect consumes it.
+bool needDeriv() { return uRelief > 0.0 || uEdge > 0.0; }
 
 const float TAU = 6.2831853;
 
@@ -75,18 +90,20 @@ vec3 gradOcean(float t) {
 // plus an explicit power-of-two exponent (derExp), and log2Px = log2 of the
 // pixel size in complex units; only log2 totals are ever combined.
 
-const vec3  RELIEF_L3   = normalize(vec3(-0.60, 0.60, 0.55)); // upper-left light
-const float RELIEF_GAIN = 12.0; // vertical exaggeration at slider = 1
+const vec3  RELIEF_L3    = normalize(vec3(-0.60, 0.60, 0.55)); // upper-left key light
+const vec3  RELIEF_FILL  = normalize(vec3(0.55, -0.55, 0.45)); // cool fill, opposite side
+const float RELIEF_GAIN  = 12.0; // vertical exaggeration at slider = 1
+const float RELIEF_SHINE = 24.0; // Blinn-Phong specular exponent
 
-// Lambert term t ∈ [0,1]; flat ground gives t = RELIEF_L3.z.
-float reliefT(vec2 z, vec2 der, float derExp, float log2Px) {
+// Heightfield surface normal; flat ground is (0,0,1).
+vec3 reliefNormal(vec2 z, vec2 der, float derExp, float log2Px) {
     float dm = max(abs(der.x), abs(der.y));
-    if (!(dm > 0.0)) return RELIEF_L3.z; // degenerate derivative → flat
+    if (!(dm > 0.0)) return vec3(0.0, 0.0, 1.0); // degenerate derivative → flat
     vec2 dn = der / dm;                  // prescale so z·conj(der) can't overflow
     vec2 u  = vec2(z.x * dn.x + z.y * dn.y,
                    z.y * dn.x - z.x * dn.y); // z·conj(der): uphill of log|z|
     float ul = length(u);
-    if (!(ul > 0.0)) return RELIEF_L3.z;
+    if (!(ul > 0.0)) return vec3(0.0, 0.0, 1.0);
     float zz  = dot(z, z);
     float lnz = 0.34657359 * log2(zz);   // ln|z|
     // |∇h| per *pixel*, in log2: the huge derExp cancels against log2Px.
@@ -94,19 +111,73 @@ float reliefT(vec2 z, vec2 der, float derExp, float log2Px) {
                - 0.5 * log2(zz) - log2(lnz * 0.6931472);
     float strength = uRelief * uRelief; // finer control at small slider values
     float g = exp2(clamp(logg, -30.0, 30.0)) * RELIEF_GAIN * strength;
-    vec3 n = normalize(vec3((u / ul) * g, 1.0)); // heightfield surface normal
-    return max(dot(n, RELIEF_L3), 0.0);
+    return normalize(vec3((u / ul) * g, 1.0));
 }
 
-// t→color: plateaus (t = L3.z) keep the palette color untouched; lit slopes
-// brighten and shadowed ones darken without crushing the palette to black.
-vec3 applyRelief(vec3 col, float t) {
+// Blinn-Phong lighting of the heightfield. Every term is measured relative to
+// its flat-ground value, so plateaus (n = +z) keep the palette color untouched;
+// lit slopes brighten, shadowed ones darken without crushing the palette to
+// black, a cool fill keeps shadows from going dead, and a palette-tinted
+// specular makes steep lit slopes gleam (Ember reads as hot metal, Ocean wet).
+vec3 applyRelief(vec3 col, vec3 n) {
+    float t = max(dot(n, RELIEF_L3), 0.0);
     float flatLight = RELIEF_L3.z;
     float lit = max(t - flatLight, 0.0) / (1.0 - flatLight);
     float shadow = max(flatLight - t, 0.0) / flatLight;
     float factor = 1.0 + 0.65 * lit - 0.50 * shadow;
-    float sheen = 0.10 * pow(smoothstep(flatLight, 1.0, t), 8.0);
-    return col * factor + vec3(sheen);
+    float fill = max(dot(n, RELIEF_FILL) - RELIEF_FILL.z, 0.0) / (1.0 - RELIEF_FILL.z);
+    vec3 h = normalize(RELIEF_L3 + vec3(0.0, 0.0, 1.0)); // view from +z
+    float specFlat = pow(h.z, RELIEF_SHINE);
+    float spec = max(pow(max(dot(n, h), 0.0), RELIEF_SHINE) - specFlat, 0.0)
+               / (1.0 - specFlat);
+    float cmax = max(col.r, max(col.g, col.b));
+    vec3 tint = cmax > 1.0e-4 ? col / cmax : vec3(1.0);
+    return col * factor
+         + vec3(0.04, 0.06, 0.10) * fill
+         + (0.35 * spec) * mix(vec3(1.0), tint, 0.5);
+}
+
+// --- Distance-estimate edge ink ---------------------------------------------
+// Exterior distance to the set, d = |z|·ln|z| / (2·|dz/dc|), from the same
+// escape values relief uses; returned in *pixels* so the effect is
+// zoom-invariant at any depth. Exponent bookkeeping mirrors reliefNormal.
+float edgePx(vec2 z, vec2 der, float derExp, float log2Px) {
+    float dm = max(abs(der.x), abs(der.y));
+    if (!(dm > 0.0)) return 1.0e6; // degenerate derivative → "far away"
+    float zz  = dot(z, z);
+    float lnz = 0.34657359 * log2(zz); // ln|z|
+    float log2d = 0.5 * log2(zz) + log2(lnz)
+                - (log2(dm) + log2(length(der / dm)) + derExp) - 1.0;
+    return exp2(clamp(log2d - log2Px, -20.0, 20.0));
+}
+
+// Filaments draw themselves: dark ink within ~EDGE_W px of the set, dipping to
+// black, then a thin bright rim hugging the boundary itself snaps back up.
+vec3 applyEdge(vec3 col, float dpx) {
+    const float EDGE_W = 7.0;
+    float ink = smoothstep(0.0, EDGE_W, dpx);
+    col *= mix(1.0, ink, uEdge);
+    float rim = exp2(-3.0 * dpx * dpx);
+    return col + (0.6 * uEdge * rim) * vec3(1.0, 0.96, 0.88);
+}
+
+// --- Stripe-average texture --------------------------------------------------
+// s is the orbit average of 0.5 + 0.5·sin(uStripeFreq·arg z) (accumulated in
+// the fragment shaders) — ~0.5 on featureless orbits, swinging toward 0/1 in
+// striated flow regions. Remapped to a brightness factor centered on 1 so the
+// palette keeps its identity.
+vec3 applyStripes(vec3 col, float s) {
+    float f = clamp(1.0 + 2.6 * (s - 0.5), 0.08, 1.92);
+    return col * mix(1.0, f, uStripe);
+}
+
+// --- Sawtooth "eclipse" bands -------------------------------------------------
+// Brightness decays smoothly toward black across each ramp cycle, then snaps
+// back to full — luminous shells with hard leading edges on iso-iteration
+// curves.
+vec3 applyBands(vec3 col, float x) {
+    float b = pow(1.0 - fract(x * 0.05 + uOffset), 2.2);
+    return col * mix(1.0, b, uBands);
 }
 
 vec3 shade(float l) {
@@ -157,4 +228,17 @@ vec3 shade(float l) {
     float t = x * 0.03 + uOffset + uHue;
     return vec3(0.25, 0.45, 0.40)
          + vec3(0.35, 0.45, 0.42) * cos(TAU * (t + vec3(0.60, 0.32, 0.10)));
+}
+
+// --- Pipeline entry -----------------------------------------------------------
+// Full color for an escaped point. `stripe` is the loop-accumulated stripe
+// average (0.5 when stripes are off); z/der/derExp are the escape values and
+// log2Px the log2 pixel size in complex units (see reliefNormal).
+vec3 colorize(float l, float stripe, vec2 z, vec2 der, float derExp, float log2Px) {
+    vec3 col = shade(l);
+    if (uBands  > 0.0) col = applyBands(col, l * uScale);
+    if (uStripe > 0.0) col = applyStripes(col, stripe);
+    if (uRelief > 0.0) col = applyRelief(col, reliefNormal(z, der, derExp, log2Px));
+    if (uEdge   > 0.0) col = applyEdge(col, edgePx(z, der, derExp, log2Px));
+    return col;
 }

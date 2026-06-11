@@ -81,6 +81,15 @@ void main() {
     vec2  zEsc = vec2(0.0);
     vec2  der    = vec2(0.0); // dz/dc as mantissa·2^derExp (see relief note)
     float derExp = 0.0;
+    // Stripe-average accumulators (see mandelbrot.frag for the rationale):
+    // accumulation stops at the small |z| > 4 bailout and after SACC_MAX early
+    // iterates — the trailing iterates of long orbits carry chaotically
+    // amplified float32 noise in arg(z).
+    const float SACC_MAX = 256.0;
+    float sSum  = 0.0;
+    float sLast = 0.0;
+    float sCnt  = 0.0;
+    float sFrac = -1.0; // < 0 while still accumulating
 
     for (int iter = 0; iter < uMaxIter; iter++) {
         vec3  Zt = fetchZ(m);
@@ -99,15 +108,26 @@ void main() {
         // below 2^-120 the orbit is simply tiny and cannot escape.
         vec2 zf = zE > -120.0 ? zm * exp2(zE) : vec2(0.0);
         zz = dot(zf, zf);
+
+        // Stripe-average accumulation: arg z comes straight off the mantissa
+        // (the 2^zE scale never changes the angle). z₀ = 0 is skipped.
+        if (uStripe > 0.0 && iter > 0 && sFrac < 0.0 && sCnt < SACC_MAX) {
+            sLast = 0.5 + 0.5 * sin(uStripeFreq * atan(zm.y, zm.x));
+            sSum += sLast;
+            sCnt += 1.0;
+            // Crossed the small bailout: u ∈ (0,1], 1 when |z| barely clears 4.
+            if (zz > 16.0) sFrac = clamp(3.0 - log2(log2(zz)), 0.0, 1.0);
+        }
+
         if (zz > R2) { esc = iter; zEsc = zf; break; }
 
-        // Relief shading needs der = dz/dc via der' = 2·z·der + 1, using the
-        // reconstructed z (rebasing doesn't touch it). The true |der| at depth
-        // is ~1/span — far beyond float32 — so it is carried as mantissa·2^derExp
-        // and the step is combined in exponent form: the 2·z·der term lives at
-        // zE+derExp+1, the +1 term at exponent 0. reliefT cancels derExp
-        // against log2(pixel size).
-        if (uRelief > 0.0) {
+        // Relief/edge shading needs der = dz/dc via der' = 2·z·der + 1, using
+        // the reconstructed z (rebasing doesn't touch it). The true |der| at
+        // depth is ~1/span — far beyond float32 — so it is carried as
+        // mantissa·2^derExp and the step is combined in exponent form: the
+        // 2·z·der term lives at zE+derExp+1, the +1 term at exponent 0.
+        // reliefNormal/edgePx cancel derExp against log2(pixel size).
+        if (needDeriv()) {
             float eA = zE + derExp + 1.0;
             float eN = max(eA, 0.0);
             der = cmul(zm, der) * pexp2(eA - eN) + vec2(pexp2(-eN), 0.0);
@@ -156,13 +176,24 @@ void main() {
         l = float(esc);
     }
 
+    // Blend the averages with and without the small-bailout crossing iterate
+    // by its fraction so the texture is continuous across iteration bands
+    // (see mandelbrot.frag).
+    float stripe = 0.5;
+    if (esc > 0 && uStripe > 0.0 && sCnt > 0.0) {
+        if (sFrac >= 0.0) {
+            float avgAll  = sSum / sCnt;
+            float avgPrev = sCnt > 1.0 ? (sSum - sLast) / (sCnt - 1.0) : avgAll;
+            stripe = mix(avgPrev, avgAll, sFrac);
+        } else {
+            stripe = sSum / sCnt; // capped: early-orbit average only
+        }
+    }
+
     vec3 col = vec3(0.0);
     if (l >= 0.0) {
-        col = shade(l);
-        if (uRelief > 0.0) {
-            float log2Px = uSpanExp + log2(uSpanMant) - log2(uResolution.x);
-            col = applyRelief(col, reliefT(zEsc, der, derExp, log2Px));
-        }
+        float log2Px = uSpanExp + log2(uSpanMant) - log2(uResolution.x);
+        col = colorize(l, stripe, zEsc, der, derExp, log2Px);
     }
     fragColor = vec4(col, 1.0);
 }
