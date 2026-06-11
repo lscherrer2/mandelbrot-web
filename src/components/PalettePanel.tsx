@@ -1,4 +1,4 @@
-import { COLOR_MODES, MODE_DEFAULTS, type ColorMode } from "../state/hash"
+import { COLOR_MODES, DEFAULTS, MODE_DEFAULTS, type ColorMode } from "../state/hash"
 import { useStore } from "../state/store"
 
 /** Display name + an approximate CSS preview of each scheme's gradient. */
@@ -26,18 +26,6 @@ const SCHEME_META: Record<ColorMode, { label: string; swatch: string }> = {
   pearl: {
     label: "Pearl",
     swatch: "linear-gradient(to right, #121216, #9095bd, #fbfbfd, #b8838a, #121216)",
-  },
-  zebra: {
-    label: "Zebra",
-    swatch: "repeating-linear-gradient(to right, #080808 0 7px, #f2f2f7 7px 14px)",
-  },
-  neon: {
-    label: "Neon",
-    swatch: "linear-gradient(to right, #000005, #00e8ff, #f4ffff, #00e8ff, #000005)",
-  },
-  aurora: {
-    label: "Aurora",
-    swatch: "linear-gradient(to right, #0a1a35, #8a3a8f, #a8c93e, #1ed99b, #0a1a35)",
   },
   clay: {
     label: "Clay",
@@ -161,12 +149,18 @@ export function PalettePanel() {
               title={SCHEME_META[m].label}
               onClick={() => {
                 const d = MODE_DEFAULTS[m]
+                // Reset every texture stage to the scheme's profile (omitted =
+                // off) so each mode renders its intended look, not leftover
+                // sliders from the previous scheme.
                 setPalette({
                   mode: m,
                   hue: d.hue,
                   scale: d.scale,
-                  // Schemes built around relief shading switch it on themselves.
-                  ...(d.relief !== undefined && { relief: d.relief }),
+                  relief: d.relief ?? 0,
+                  stripes: d.stripes ?? 0,
+                  stripeFreq: d.stripeFreq ?? DEFAULTS.palette.stripeFreq,
+                  edges: d.edges ?? 0,
+                  bands: d.bands ?? 0,
                 })
               }}
               className="group appearance-none flex flex-col items-stretch gap-1"

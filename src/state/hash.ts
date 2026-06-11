@@ -24,9 +24,6 @@ export const COLOR_MODES = [
   "ember",
   "ocean",
   "pearl",
-  "zebra",
-  "neon",
-  "aurora",
   "clay",
 ] as const
 
@@ -66,19 +63,32 @@ export type PersistedState = {
   centerStr?: { re: string; im: string }
 }
 
-export const MODE_DEFAULTS: Record<
-  ColorMode,
-  { hue: number; scale: number; relief?: number }
-> = {
+// Per-scheme starting point. Beyond hue/scale, each scheme can pre-set the
+// texture stages (relief/stripes/stripeFreq/edges/bands) that give it its
+// signature look; selecting the scheme resets every texture field to these
+// values (omitted = off), so each mode renders as intended rather than
+// inheriting leftover sliders. See applyRelief/applyStripes/applyEdge in
+// src/render/palette.glsl for what each effect does.
+export type ModeDefaults = {
+  hue: number
+  scale: number
+  relief?: number
+  stripes?: number
+  stripeFreq?: number
+  edges?: number
+  bands?: number
+}
+
+export const MODE_DEFAULTS: Record<ColorMode, ModeDefaults> = {
   hsv: { hue: 0.0, scale: 0.25 },
   iq: { hue: 1.0, scale: 0.3 },
   classic: { hue: 0.0, scale: 0.5 },
-  ember: { hue: 0.0, scale: 0.5 },
-  ocean: { hue: 0.0, scale: 0.5 },
-  pearl: { hue: 0.0, scale: 0.4 },
-  zebra: { hue: 0.6, scale: 0.4 },
-  neon: { hue: 0.5, scale: 0.5 },
-  aurora: { hue: 0.0, scale: 0.5 },
+  // Black-body ramp + relief reads as glowing hot metal.
+  ember: { hue: 0.0, scale: 0.5, relief: 0.7 },
+  // Relief makes the surface look wet; gentle stripes add a water-flow grain.
+  ocean: { hue: 0.0, scale: 0.5, relief: 0.6, stripes: 0.3 },
+  // Relief brings out the silvery metallic sheen.
+  pearl: { hue: 0.0, scale: 0.4, relief: 0.5 },
   // Near-flat tint: the look comes entirely from relief shading, so turn it on.
   clay: { hue: 0.04, scale: 0.05, relief: 1.0 },
 }

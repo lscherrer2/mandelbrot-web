@@ -208,26 +208,9 @@ vec3 shade(float l) {
         vec3 tint = mix(vec3(0.52, 0.56, 0.74), vec3(0.72, 0.50, 0.52), wash);
         return band * mix(tint, vec3(1.0), band * band) + vec3(0.03);
     }
-    if (uMode == 6) { // Zebra — crisp alternating bands, smoothed for AA
-        float s = fract(x * 0.05 + uOffset);
-        float b = smoothstep(0.0, 0.08, s) - smoothstep(0.5, 0.58, s);
-        vec3 tint = hsv2rgb(vec3(uHue, 0.25 * uSat, 1.0));
-        return mix(vec3(0.03), tint, b);
-    }
-    if (uMode == 7) { // Neon — dark field, electric band cores that bloom white
-        float t = fract(x * 0.04 + uOffset);
-        float g = pow(0.5 + 0.5 * cos(TAU * t), 6.0);
-        vec3 base = hsv2rgb(vec3(uHue + 0.07 * sin(TAU * x * 0.008), max(uSat, 0.85), 1.0));
-        return base * (0.05 + 0.95 * g) + vec3(0.55) * pow(g, 3.0);
-    }
-    if (uMode == 9) { // Clay — near-flat warm matte, made for Relief shading
-        float wash = 0.5 + 0.5 * cos(TAU * (x * 0.02 + uOffset));
-        return hsv2rgb(vec3(uHue, (0.30 + 0.10 * wash) * uSat, 0.60 + 0.08 * wash));
-    }
-    // Aurora — flowing emerald / teal / violet curtains (cosine palette)
-    float t = x * 0.03 + uOffset + uHue;
-    return vec3(0.25, 0.45, 0.40)
-         + vec3(0.35, 0.45, 0.42) * cos(TAU * (t + vec3(0.60, 0.32, 0.10)));
+    // Clay (uMode == 6) — near-flat warm matte, made for Relief shading
+    float wash = 0.5 + 0.5 * cos(TAU * (x * 0.02 + uOffset));
+    return hsv2rgb(vec3(uHue, (0.30 + 0.10 * wash) * uSat, 0.60 + 0.08 * wash));
 }
 
 // --- Pipeline entry -----------------------------------------------------------
