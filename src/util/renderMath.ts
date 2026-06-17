@@ -9,18 +9,6 @@ export type Viewport = { cx: number; cy: number; span: number }
 // Absolute floor on viewport.span, matched to MAX_ZOOM.
 export const MIN_SPAN = BASE_SPAN / Math.pow(2, MAX_ZOOM)
 
-// Span at/above which the plain float32 direct shader (Tier A) still resolves
-// pixels — its precision wall is ~1e-4. Below this we switch to Tier C
-// (perturbation). A hysteresis band (handled by the caller) avoids flicker.
-export const TIER_DIRECT_MIN_SPAN = 2e-4
-
-export type Tier = "direct" | "perturb"
-
-/** Which renderer to use for a given span (no hysteresis — caller adds that). */
-export function pickTier(span: number): Tier {
-  return span >= TIER_DIRECT_MIN_SPAN ? "direct" : "perturb"
-}
-
 export function clampSpan(span: number): number {
   return Math.max(MIN_SPAN, span)
 }

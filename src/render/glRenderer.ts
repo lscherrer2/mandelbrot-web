@@ -3,7 +3,6 @@ import { MODE_INDEX } from "../state/hash"
 import { spanMantExp } from "../util/renderMath"
 import { RefOrbitTexture } from "./refOrbitTexture"
 import blitFrag from "./blit.frag?raw"
-import directFrag from "./mandelbrot.frag?raw"
 import perturbFrag from "./mandelbrot.perturb.frag?raw"
 import paletteSource from "./palette.glsl?raw"
 import vertSource from "./mandelbrot.vert?raw"
@@ -15,25 +14,6 @@ function expandIncludes(src: string): string {
 
 const ORBIT_UNIT = 0
 const BLIT_UNIT = 1
-
-type DirectUniforms = {
-  uResolution: WebGLUniformLocation
-  uCenter: WebGLUniformLocation
-  uSpanX: WebGLUniformLocation
-  uMaxIter: WebGLUniformLocation
-  uHue: WebGLUniformLocation
-  uSat: WebGLUniformLocation
-  uVal: WebGLUniformLocation
-  uScale: WebGLUniformLocation
-  uOffset: WebGLUniformLocation
-  uRelief: WebGLUniformLocation
-  uStripe: WebGLUniformLocation
-  uStripeFreq: WebGLUniformLocation
-  uEdge: WebGLUniformLocation
-  uBands: WebGLUniformLocation
-  uSmooth: WebGLUniformLocation
-  uMode: WebGLUniformLocation
-}
 
 type PerturbUniforms = {
   uResolution: WebGLUniformLocation
@@ -72,10 +52,8 @@ type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number }
 export class GLRenderer {
   private gl: WebGL2RenderingContext
   private vao: WebGLVertexArrayObject
-  private directProgram: WebGLProgram
   private perturbProgram: WebGLProgram
   private blitProgram: WebGLProgram
-  private directUniforms: DirectUniforms
   private perturbUniforms: PerturbUniforms
   private blitUniforms: BlitUniforms
   private orbit: RefOrbitTexture
@@ -100,16 +78,10 @@ export class GLRenderer {
     gl.getExtension("EXT_color_buffer_float")
 
     const vs = compile(gl, gl.VERTEX_SHADER, vertSource)
-    this.directProgram = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, expandIncludes(directFrag)))
     this.perturbProgram = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, expandIncludes(perturbFrag)))
     this.blitProgram = link(gl, vs, compile(gl, gl.FRAGMENT_SHADER, blitFrag))
     gl.deleteShader(vs)
 
-    this.directUniforms = mapUniforms(gl, this.directProgram, [
-      "uResolution", "uCenter", "uSpanX", "uMaxIter",
-      "uHue", "uSat", "uVal", "uScale", "uOffset", "uRelief",
-      "uStripe", "uStripeFreq", "uEdge", "uBands", "uSmooth", "uMode",
-    ]) as unknown as DirectUniforms
     this.perturbUniforms = mapUniforms(gl, this.perturbProgram, [
       "uResolution", "uSpanMant", "uSpanExp", "uPixelBias", "uMaxIter",
       "uRefOrbit", "uRefW", "uMaxRefIter",
@@ -143,21 +115,6 @@ export class GLRenderer {
 
   hasOrbitData(): boolean {
     return this.hasOrbit
-  }
-
-  /** Draw the shallow (direct float32) tier straight to the canvas. */
-  render(params: RenderParams): void {
-    const { gl, directUniforms: u } = this
-    const p = params
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-    gl.useProgram(this.directProgram)
-    gl.bindVertexArray(this.vao)
-    gl.uniform2f(u.uResolution, p.width, p.height)
-    gl.uniform2f(u.uCenter, p.cx, p.cy)
-    gl.uniform1f(u.uSpanX, p.spanX)
-    gl.uniform1i(u.uMaxIter, p.iterations)
-    this.setPalette(u, p)
-    gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
   /**
@@ -245,7 +202,7 @@ export class GLRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
-  private setPalette(u: DirectUniforms | PerturbUniforms, p: RenderParams): void {
+  private setPalette(u: PerturbUniforms, p: RenderParams): void {
     const { gl } = this
     gl.uniform1f(u.uHue, p.palette.hue)
     gl.uniform1f(u.uSat, p.palette.sat)
@@ -268,7 +225,6 @@ export class GLRenderer {
       gl.deleteFramebuffer(t.fbo)
       gl.deleteTexture(t.tex)
     }
-    gl.deleteProgram(this.directProgram)
     gl.deleteProgram(this.perturbProgram)
     gl.deleteProgram(this.blitProgram)
     gl.deleteVertexArray(this.vao)

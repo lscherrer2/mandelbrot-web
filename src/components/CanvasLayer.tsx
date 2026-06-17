@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react"
 import { GLRenderer } from "../render/glRenderer"
 import type { Palette } from "../state/hash"
 import { useStore } from "../state/store"
-import { effectiveIterations, TIER_DIRECT_MIN_SPAN } from "../util/renderMath"
+import { effectiveIterations } from "../util/renderMath"
 import { fracBitsFor, FRAC_HP, type Fixed, toDecimalString, toNumber } from "../highprec/fixedpoint"
 import type { OrbitRequest, OrbitResult } from "../highprec/referenceOrbit.worker"
 
@@ -49,13 +49,11 @@ type DeepJob = {
 }
 
 /**
- * Full-bleed WebGL2 canvas. Each animation frame it picks a render tier from
- * the current span: the original float32 shader for shallow zoom (unchanged hot
- * path), or the perturbation shader for deep zoom. The deep tier is driven by a
- * Web Worker that computes the reference orbit, and renders adaptively — a fast
+ * Full-bleed WebGL2 canvas. Uses the perturbation renderer at all zoom levels.
+ * A Web Worker computes the reference orbit; renders are adaptive — a fast
  * low-res preview while interacting, progressively sharpened once the view is
- * still. Deep renders run decoupled from the canvas (see DeepJob pipeline
- * above) so zoom/pan stay responsive even when a full-quality frame is slow.
+ * still. Renders run decoupled from the canvas (see DeepJob pipeline above) so
+ * zoom/pan stay responsive even when a full-quality frame is slow.
  */
 export function CanvasLayer() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -70,7 +68,6 @@ export function CanvasLayer() {
     )
 
     // Orbit + quality orchestration (mutable, not React state).
-    let tier: "direct" | "perturb" = "direct"
     let loadedAnchor: { x: Fixed; y: Fixed } | null = null
     let lastReq: { reqId: number; x: Fixed; y: Fixed; span: number; band: number } | null = null
     let inFlight = false
@@ -124,18 +121,6 @@ export function CanvasLayer() {
         const palDraw = pal
         const dpr = window.devicePixelRatio || 1
 
-        // Tier selection with hysteresis to avoid flicker at the boundary.
-        const prevTier = tier
-        if (span < TIER_DIRECT_MIN_SPAN) tier = "perturb"
-        else if (span > TIER_DIRECT_MIN_SPAN * 2) tier = "direct"
-        if (tier === "perturb" && prevTier === "direct") {
-          // Fresh deep session: nothing rendered yet at this depth. The canvas
-          // keeps the last direct frame until the first preview lands.
-          job = null
-          front = null
-          lastStart = null
-        }
-
         // The view (center/zoom/size) moved → drop to preview + invalidate sharp.
         const viewMoved =
           span !== lastSpan ||
@@ -170,27 +155,7 @@ export function CanvasLayer() {
         }
         const moving = now - lastMoveTime < SETTLE_MS
 
-        if (tier === "direct") {
-          // Shallow path: full 2× supersampling, every frame (cheap).
-          const ratio = Math.min(3, dpr * 2)
-          const bw = Math.max(1, Math.floor(cssW * ratio))
-          const bh = Math.max(1, Math.floor(cssH * ratio))
-          renderer.resize(bw, bh)
-          renderer.render({
-            tier: "direct",
-            cx: st.viewport.cx,
-            cy: st.viewport.cy,
-            spanX: span,
-            width: bw,
-            height: bh,
-            iterations: iters,
-            palette: palDraw,
-          })
-          raf = requestAnimationFrame(tick)
-          return
-        }
-
-        // Deep tier. Settled, sharp, nothing in flight → keep the frame as-is.
+        // Settled, sharp, nothing in flight → keep the frame as-is.
         if (!moving && sharpDone && job === null && !frontDirty) {
           raf = requestAnimationFrame(tick)
           return
@@ -236,8 +201,7 @@ export function CanvasLayer() {
           worker.postMessage(req)
         }
 
-        // No orbit yet (first deep frame) — keep the previous frame on screen
-        // (don't draw the float32 shader, which is solid black at this depth).
+        // No orbit yet — keep the previous frame on screen until the first orbit lands.
         if (!renderer.hasOrbitData()) {
           raf = requestAnimationFrame(tick)
           return
@@ -264,7 +228,6 @@ export function CanvasLayer() {
             )
             renderer.renderPerturbStrip(
               {
-                tier: "perturb",
                 cx: 0,
                 cy: 0,
                 spanX: job.span,
