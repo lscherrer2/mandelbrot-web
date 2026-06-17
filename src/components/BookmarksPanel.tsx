@@ -1,9 +1,10 @@
-import { Check, Copy, MapPin, Trash2 } from "lucide-react"
+import { Check, Copy, Lock, MapPin, Trash2 } from "lucide-react"
 import { useState } from "react"
 
+import { DEFAULT_BOOKMARKS } from "../state/defaultBookmarks"
 import { type Bookmark, useStore } from "../state/store"
 
-function BookmarkRow({ b }: { b: Bookmark }) {
+function BookmarkRow({ b, deletable = true }: { b: Bookmark; deletable?: boolean }) {
   const loadBookmark = useStore((s) => s.loadBookmark)
   const deleteBookmark = useStore((s) => s.deleteBookmark)
   const [copied, setCopied] = useState(false)
@@ -43,13 +44,19 @@ function BookmarkRow({ b }: { b: Bookmark }) {
       >
         {copied ? <Check size={11} /> : <Copy size={11} />}
       </button>
-      <button
-        onClick={onDelete}
-        title="Delete bookmark"
-        className="shrink-0 p-1 text-zinc-600 hover:text-red-400 transition-colors"
-      >
-        <Trash2 size={11} />
-      </button>
+      {deletable ? (
+        <button
+          onClick={onDelete}
+          title="Delete bookmark"
+          className="shrink-0 p-1 text-zinc-600 hover:text-red-400 transition-colors"
+        >
+          <Trash2 size={11} />
+        </button>
+      ) : (
+        <span className="shrink-0 p-1 text-zinc-700" title="Default bookmark">
+          <Lock size={11} />
+        </span>
+      )}
     </div>
   )
 }
@@ -111,15 +118,20 @@ export function BookmarksPanel() {
         </form>
       )}
 
-      {bookmarks.length === 0 ? (
-        <p className="text-[11px] text-zinc-600 italic">No bookmarks yet</p>
-      ) : (
-        <div className="-mx-2 space-y-0.5">
-          {bookmarks.map((b) => (
-            <BookmarkRow key={b.id} b={b} />
-          ))}
-        </div>
-      )}
+      <div className="-mx-2 space-y-0.5">
+        {DEFAULT_BOOKMARKS.map((b) => (
+          <BookmarkRow key={b.id} b={b} deletable={false} />
+        ))}
+        {bookmarks.length > 0 && DEFAULT_BOOKMARKS.length > 0 && (
+          <div className="mx-2 border-t border-zinc-800/60 my-1" />
+        )}
+        {bookmarks.map((b) => (
+          <BookmarkRow key={b.id} b={b} />
+        ))}
+        {bookmarks.length === 0 && DEFAULT_BOOKMARKS.length === 0 && (
+          <p className="text-[11px] text-zinc-600 italic px-2">No bookmarks yet</p>
+        )}
+      </div>
     </section>
   )
 }
